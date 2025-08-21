@@ -5,6 +5,9 @@ require('dotenv').config();
 const app = express();
 const PORT = 3001;
 
+// In-memory token storage (use database in production)
+const userTokenUsage = new Map();
+
 // Initialize Claude - only if API key exists
 let anthropic = null;
 try {
@@ -35,33 +38,14 @@ function estimateTokens(text) {
 function detectMathematicalTopic(message) {
   const message_lower = message.toLowerCase();
   
-  // Topic detection patterns
   const topicPatterns = {
-    'Algebra & Equations': [
-      'equation', 'solve', 'x', 'y', 'variable', 'unknown', 'algebra',
-      'linear', 'expression', 'coefficient', 'term', 'simplify',
-      'substitute', 'formula', 'function', '=', 'equals'
-    ],
-    'Geometry & Measurement': [
-      'angle', 'triangle', 'rectangle', 'circle', 'area', 'perimeter',
-      'volume', 'measurement', 'length', 'width', 'height', 'degrees',
-      'polygon', 'coordinate', 'transformation', 'shape'
-    ],
-    'Fractions & Decimals': [
-      'fraction', 'decimal', 'percentage', 'numerator', 'denominator',
-      'equivalent', 'convert', 'ratio', 'proportion', '/', 'percent'
-    ],
-    'Numbers & Indices': [
-      'power', 'exponent', 'square', 'cube', 'root', 'index', 'indices',
-      'scientific notation', 'standard form', '^', 'squared', 'cubed'
-    ],
-    'Statistics & Data': [
-      'statistics', 'data', 'graph', 'chart', 'mean', 'median', 'mode',
-      'range', 'probability', 'survey', 'sample', 'population', 'average'
-    ]
+    'Algebra': ['equation', 'solve', 'x', 'y', 'variable', 'algebra', '='],
+    'Geometry': ['angle', 'triangle', 'area', 'perimeter', 'shape'],
+    'Fractions': ['fraction', 'decimal', 'percentage', '/', 'percent'],
+    'Indices': ['power', 'exponent', 'square', 'cube', '^'],
+    'Statistics': ['data', 'graph', 'mean', 'median', 'average']
   };
   
-  // Count matches for each topic
   let bestTopic = 'Mathematics';
   let bestScore = 0;
   
@@ -80,182 +64,26 @@ function detectMathematicalTopic(message) {
 function isOnTopic(message, subject) {
   const message_lower = message.toLowerCase();
   
-  // Define ALL off-topic keywords/phrases - much more comprehensive
-  const offTopicKeywords = [
-    // Personal/inappropriate
-    'religion', 'politics', 'political', 'vote', 'election', 'government',
-    'sex', 'dating', 'boyfriend', 'girlfriend', 'drugs', 'alcohol',
-    'personal information', 'address', 'phone number', 'password',
-    
-    // Non-educational
-    'video games', 'movies', 'tv show', 'celebrity', 'music', 'sports',
-    'social media', 'instagram', 'tiktok', 'youtube',
-    
-    // Inappropriate requests
-    'homework answers', 'do my homework', 'give me the answer',
-    'write my essay', 'complete this for me',
-    
-    // Personal advice/counseling (NEW - STRICT)
-    'my teacher', 'teacher said', 'teacher thinks', 'teacher gave me',
-    'bad marks', 'poor grades', 'failing', 'study habits', 'study tips',
-    'how to study', 'motivation', 'feeling sad', 'upset about',
-    'parents said', 'mom said', 'dad said', 'family thinks',
-    'friends think', 'classmates', 'bullying', 'stress',
-    'anxiety about', 'worried about', 'scared of', 'nervous',
-    'life advice', 'what should i do', 'personal problem',
-    'relationship', 'friendship', 'argument with',
-    'career advice', 'future plans', 'what job', 'university',
-    'personal story', 'tell you about', 'happened to me',
-    'advice about', 'help me with my', 'opinion on',
-    'thoughts on', 'what do you think about me'
-  ];
+  // Allow homework help
+  const homeworkHelp = ['help with homework', 'homework help', 'need help with', 'stuck on homework'];
+  if (homeworkHelp.some(phrase => message_lower.includes(phrase))) {
+    return true;
+  }
   
-  // Check for off-topic content
-  const containsOffTopic = offTopicKeywords.some(keyword => 
-    message_lower.includes(keyword)
-  );
-  
-  if (containsOffTopic) {
+  // Block off-topic
+  const offTopic = ['religion', 'politics', 'dating', 'video games', 'movies', 'do my homework for me'];
+  if (offTopic.some(keyword => message_lower.includes(keyword))) {
     return false;
   }
   
-  // STRICT: Only allow if it contains MATHEMATICAL content
-  const mathKeywords = {
-    'Algebra & Equations': [
-      'equation', 'solve', 'x', 'y', 'variable', 'unknown', 'algebra',
-      'linear', 'expression', 'coefficient', 'term', 'simplify',
-      'substitute', 'formula', 'function', 'graph', 'slope',
-      '+', '-', '=', 'equals', 'add', 'subtract', 'multiply', 'divide'
-    ],
-    'Mathematics': [
-      'math', 'maths', 'calculate', 'number', 'equation', 'fraction',
-      'decimal', 'percentage', 'geometry', 'area', 'perimeter', 'volume',
-      'algebra', 'statistics', 'probability', 'graph', 'measurement',
-      '+', '-', '×', '÷', '=', 'equals', 'formula', 'solve'
-    ]
-  };
-  
-  const relevantKeywords = mathKeywords[subject] || mathKeywords['Mathematics'];
-  
-  // Must contain mathematical content
-  const containsMath = relevantKeywords.some(keyword => 
-    message_lower.includes(keyword)
-  );
-  
-  // Only allow specific mathematical help phrases
-  const allowedHelpPhrases = [
-    'solve this', 'help with this equation', 'explain this formula',
-    'how do i solve', 'what is the answer to', 'step by step',
-    'show me how', 'work through this', 'calculate this',
-    'find the value', 'what does this equal'
-  ];
-  
-  const containsValidHelp = allowedHelpPhrases.some(phrase => 
-    message_lower.includes(phrase)
-  );
-  
-  // Must contain either math keywords OR valid mathematical help request
-  return containsMath || containsValidHelp;
+  // Must contain math content
+  const mathKeywords = ['math', 'equation', 'solve', 'calculate', 'x', 'y', '+', '-', '=', 'formula'];
+  return mathKeywords.some(keyword => message_lower.includes(keyword));
 }
 
-// Function to create curriculum-specific system prompt
+// Optimized system prompt - much shorter
 function createSystemPrompt(subject, yearLevel, curriculum) {
-  const basePrompt = `You are StudyBuddy, an AI learning companion helping Year ${yearLevel} students with ${subject} following the ${curriculum} curriculum.
-
-STUDENT CONTEXT:
-- Year Level: ${yearLevel} (ages ${yearLevel + 5}-${yearLevel + 6})
-- Curriculum: ${curriculum} Education Standards Authority
-- Subject Focus: ${subject}
-- Location: Australia`;
-
-  // Subject-specific curriculum details
-  const subjectDetails = {
-    'Algebra & Equations': `
-ALGEBRA & EQUATIONS CURRICULUM (Year ${yearLevel}):
-- Solving linear equations with one variable
-- Substitution into algebraic expressions
-- Expanding and factoring simple expressions
-- Understanding variables and unknowns
-- Graphing linear relationships
-- Number patterns and sequences
-
-Key Skills to Develop:
-- Using pronumerals to represent variables
-- Solving equations by inspection and systematic methods
-- Understanding the balance method for equations
-- Connecting algebra to real-world contexts`,
-
-    'Geometry & Measurement': `
-GEOMETRY & MEASUREMENT CURRICULUM (Year ${yearLevel}):
-- Angle relationships and properties
-- Area and perimeter of composite shapes
-- Volume and surface area of prisms
-- Coordinate geometry basics
-- Geometric transformations
-- Scale and similarity
-
-Key Skills to Develop:
-- Using geometric reasoning
-- Applying measurement formulas
-- Understanding geometric properties`,
-
-    'Numbers & Indices': `
-NUMBERS & INDICES CURRICULUM (Year ${yearLevel}):
-- Index notation and laws
-- Powers and roots
-- Scientific notation
-- Rational and irrational numbers
-- Number operations and order
-- Estimation and approximation
-
-Key Skills to Develop:
-- Understanding index laws
-- Working with powers of 10
-- Converting between forms`,
-
-    'Mathematics': `
-MATHEMATICS CURRICULUM (Year ${yearLevel}):
-- Number and Algebra: integers, fractions, decimals, percentages, basic algebra
-- Measurement and Geometry: area, perimeter, volume, angles, coordinate geometry  
-- Statistics and Probability: data collection, graphing, basic probability
-
-Key Skills to Develop:
-- Mathematical reasoning and problem-solving
-- Communication of mathematical ideas
-- Connection between mathematical concepts`
-  };
-
-  const curriculumDetail = subjectDetails[subject] || subjectDetails['Mathematics'];
-
-  return basePrompt + curriculumDetail + `
-
-TEACHING APPROACH:
-- Use ${curriculum} curriculum terminology and Australian contexts
-- Guide discovery learning through questioning (Socratic method)
-- Break problems into Year ${yearLevel} appropriate steps
-- Encourage mathematical reasoning and explanation of working
-- Connect new learning to prior Year ${yearLevel - 1} knowledge
-- Build readiness for Year ${yearLevel + 1} concepts
-- Reference real Australian examples when helpful
-
-RESPONSE STYLE:
-- Ask guiding questions: "What do you notice?" "How might we start?"
-- Use encouraging language: "You're on the right track!" "Let's think together!"
-- Suggest multiple approaches when appropriate
-- Help students self-check through questioning
-- Keep responses concise and age-appropriate
-- ONLY discuss ${subject} topics - redirect off-topic questions
-
-IMPORTANT RESTRICTIONS:
-- ONLY discuss mathematical problems, equations, and calculations
-- DO NOT provide personal advice, study tips, or life guidance
-- DO NOT discuss teachers, grades, personal feelings, or school experiences
-- DO NOT answer questions about motivation, study habits, or academic performance
-- Redirect ALL non-mathematical questions back to ${subject} problems
-- Focus exclusively on mathematical concepts and problem-solving
-- If asked about anything personal or non-mathematical, respond: "I can only help with ${subject} problems. Please share a mathematical equation or problem for me to help with."
-
-Remember: You are STRICTLY a ${subject} problem-solving assistant for Year ${yearLevel} students. Nothing else.`;
+  return `You are StudyBuddy, a Year ${yearLevel} ${curriculum} ${subject} tutor. Use Socratic questioning - ask "What do you notice?" instead of giving answers. Guide discovery learning. Keep responses under 150 words. Only discuss mathematics.`;
 }
 
 // Health check
@@ -268,135 +96,160 @@ app.get('/', (req, res) => {
   });
 });
 
-// Chat route with Claude integration and all protections
+// Add to your server.js
+app.post('/api/generate-worksheet', async (req, res) => {
+  const { topic, difficulty, questionCount, yearLevel, curriculum, userId } = req.body;
+  
+  if (!anthropic) {
+    return res.json({
+      questions: [`Sample ${topic} question 1`, `Sample ${topic} question 2`],
+      fallback: true
+    });
+  }
+
+  try {
+    const prompt = `Generate ${questionCount} ${difficulty} level ${topic} questions for Year ${yearLevel} ${curriculum} mathematics. 
+
+Format as a numbered list with:
+1. Clear, age-appropriate questions
+2. Include answer space (Answer: _____) 
+3. Ensure questions test different concepts within ${topic}
+4. Match ${curriculum} curriculum standards
+
+Topic: ${topic}
+Difficulty: ${difficulty}
+Student Level: Year ${yearLevel}`;
+
+    const response = await anthropic.messages.create({
+      model: 'claude-3-5-haiku-20241022',
+      max_tokens: 1000,
+      messages: [{ role: 'user', content: prompt }]
+    });
+
+    const questions = response.content[0].text;
+    
+    res.json({
+      questions: questions,
+      topic: topic,
+      difficulty: difficulty,
+      count: questionCount
+    });
+    
+  } catch (error) {
+    res.json({
+      questions: "Error generating worksheet. Please try again.",
+      error: true
+    });
+  }
+});
+
+// Get user token usage
+app.get('/api/user/:userId/tokens', (req, res) => {
+  const { userId } = req.params;
+  const usage = userTokenUsage.get(userId) || { used: 0, limit: 5000 };
+  
+  res.json({
+    tokensUsed: usage.used,
+    tokensLimit: usage.limit,
+    percentage: Math.round((usage.used / usage.limit) * 100)
+  });
+});
+
+// Chat route with Claude 3.5 Haiku and optimized prompts
 app.post('/api/chat', async (req, res) => {
   console.log('\n🚀 === CHAT REQUEST ===');
-  console.log('📋 Body:', req.body);
   
   const { message, subject, yearLevel = 7, curriculum = 'NSW', conversationHistory, userId } = req.body;
   
-  // Detect specific mathematical topic from the message content
+  // Detect topic
   const detectedTopic = detectMathematicalTopic(message);
-  console.log(`🎯 Auto-detected topic: ${detectedTopic} (frontend sent: ${subject})`);
+  console.log(`🎯 Topic: ${detectedTopic}`);
   
-  // Use detected topic for more precise tutoring
-  const actualSubject = detectedTopic;
-  
-  // Log the detected context
-  console.log(`🎓 Context: Year ${yearLevel} ${curriculum} ${actualSubject}`);
-  
-  // Check token limits for input
+  // Check token limits
   const inputTokens = estimateTokens(message);
-  if (inputTokens > 3000) {
-    console.log('❌ Input too long:', inputTokens, 'tokens');
+  if (inputTokens > 1000) {
     return res.json({
-      response: "That message is quite long! Could you break it down into a shorter question? I work best with messages under 3000 characters.",
-      subject: actualSubject,
-      yearLevel: yearLevel,
+      response: "Please keep your message shorter - I work best with concise questions.",
       error: 'input_too_long'
     });
   }
   
-  // Check if the message is on-topic
-  if (!isOnTopic(message, actualSubject)) {
-    console.log('❌ Off-topic message detected');
+  // Check if on-topic
+  if (!isOnTopic(message, detectedTopic)) {
     return res.json({
-      response: `I can only help with Year ${yearLevel} mathematics problems. Please share a mathematical equation or problem for me to help with.`,
-      subject: actualSubject,
-      yearLevel: yearLevel,
+      response: `I can only help with Year ${yearLevel} mathematics problems. Please share a math question.`,
       error: 'off_topic'
     });
   }
   
-  // If no Claude API, send fallback
+  // Fallback if no API
   if (!anthropic) {
-    console.log('⚠️  Using fallback response (no Claude API)');
     return res.json({
-      response: `I'm ready to help with Year ${yearLevel} ${actualSubject}! You asked: "${message}". (Note: Add CLAUDE_API_KEY to .env for full AI responses)`,
-      subject: actualSubject,
-      yearLevel: yearLevel,
+      response: `I'm ready to help with ${detectedTopic}! You asked: "${message}". (Add CLAUDE_API_KEY for AI responses)`,
       fallback: true
     });
   }
   
   try {
-    console.log('🤖 Calling Claude API...');
-    console.log('📚 Conversation history length:', conversationHistory ? conversationHistory.length : 0);
-    console.log('🔢 Input tokens estimate:', inputTokens);
-    
-    // Create context-aware system prompt with detected topic
-    const systemPrompt = createSystemPrompt(actualSubject, yearLevel, curriculum);
-    console.log('📝 System prompt created for:', actualSubject, 'Year', yearLevel, curriculum);
+    // Create short system prompt
+    const systemPrompt = createSystemPrompt(detectedTopic, yearLevel, curriculum);
+    console.log('📝 System prompt length:', systemPrompt.length, 'chars');
 
-    // Use conversation history if available, otherwise just the current message
-    const messages = conversationHistory && conversationHistory.length > 0 
-      ? conversationHistory 
+    // Limit conversation history to last 4 exchanges to control token usage
+    const limitedHistory = conversationHistory && conversationHistory.length > 8 
+      ? conversationHistory.slice(-8) 
+      : conversationHistory || [];
+
+    const messages = limitedHistory.length > 0 
+      ? limitedHistory 
       : [{ role: 'user', content: message }];
 
-    console.log('📝 Sending to Claude with auto-detected topic prompt');
+    console.log('📝 Sending to Claude Haiku...');
 
-    const response = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 3000, // Limited to 3000 tokens output
+    const claudeResponse = await anthropic.messages.create({
+      model: 'claude-3-5-haiku-20241022', // Using Haiku instead of Sonnet
+      max_tokens: 300, // Reduced from 3000
       system: systemPrompt,
       messages: messages
     });
 
-    const responseText = response.content[0].text;
-    const outputTokens = estimateTokens(responseText);
+    const responseText = claudeResponse.content[0].text;
     
-    console.log('✅ Claude responded successfully!');
-    console.log('📝 Response length:', responseText.length);
-    console.log('🔢 Output tokens estimate:', outputTokens);
+    // Get actual token usage
+    const actualInputTokens = claudeResponse.usage?.input_tokens || inputTokens;
+    const actualOutputTokens = claudeResponse.usage?.output_tokens || estimateTokens(responseText);
     
-    // Log token usage for user tracking
-    if (userId) {
-      console.log(`👤 User ${userId} used ${inputTokens + outputTokens} tokens this request`);
-    }
+    console.log('✅ Claude Haiku responded!');
+    console.log('🔢 Tokens - Input:', actualInputTokens, 'Output:', actualOutputTokens);
     
-    // Double-check output isn't too long (though max_tokens should handle this)
-    if (outputTokens > 3000) {
-      console.log('⚠️  Response too long, truncating...');
-      const truncatedResponse = responseText.substring(0, 2800) + "... (I'll keep my responses shorter next time!)";
-      
-      return res.json({
-        response: truncatedResponse,
-        subject: actualSubject,
-        detectedTopic: detectedTopic,
-        yearLevel: yearLevel,
-        curriculum: curriculum,
-        powered_by: 'Claude API',
-        truncated: true,
-        tokens: {
-          input: inputTokens,
-          output: estimateTokens(truncatedResponse)
-        }
-      });
-    }
+    // Update token usage
+    const currentUsage = userTokenUsage.get(userId) || { used: 0, limit: 5000 };
+    currentUsage.used += (actualInputTokens + actualOutputTokens);
+    userTokenUsage.set(userId, currentUsage);
+    
+    console.log(`👤 User ${userId} used ${actualInputTokens + actualOutputTokens} tokens this request`);
+    console.log(`📊 Total usage: ${currentUsage.used}/${currentUsage.limit}`);
     
     res.json({
       response: responseText,
-      subject: actualSubject,
+      subject: detectedTopic,
       detectedTopic: detectedTopic,
       yearLevel: yearLevel,
       curriculum: curriculum,
-      powered_by: 'Claude API',
+      powered_by: 'Claude 3.5 Haiku',
       tokens: {
-        input: inputTokens,
-        output: outputTokens
+        input: actualInputTokens,
+        output: actualOutputTokens,
+        totalUsed: currentUsage.used,
+        limit: currentUsage.limit
       }
     });
     
   } catch (error) {
     console.error('❌ Claude API Error:', error.message);
     
-    // Send fallback response on error
     res.json({
-      response: `I'm having a technical issue right now, but I'm still here to help with Year ${yearLevel} mathematics! You asked: "${message}". Could you try rephrasing your question?`,
-      subject: actualSubject,
-      detectedTopic: detectedTopic,
-      yearLevel: yearLevel,
-      curriculum: curriculum,
+      response: `I'm having a technical issue right now, but I'm still here to help with Year ${yearLevel} mathematics! Could you try rephrasing your question?`,
       error: true,
       fallback: true
     });
@@ -406,16 +259,16 @@ app.post('/api/chat', async (req, res) => {
 });
 
 app.post('/api/login', (req, res) => {
-    // Handle login logic
-  });
-  
-  app.post('/api/register', (req, res) => {
-    // Handle registration
-  });
-  
-  app.get('/api/user', (req, res) => {
-    // Get user profile
-  });
+  // Handle login logic
+});
+
+app.post('/api/register', (req, res) => {
+  // Handle registration
+});
+
+app.get('/api/user', (req, res) => {
+  // Get user profile
+});
 
 // Debug endpoint
 app.get('/debug', (req, res) => {
@@ -423,37 +276,24 @@ app.get('/debug', (req, res) => {
     claudeApiKey: process.env.CLAUDE_API_KEY ? 'Configured ✅' : 'Missing ❌',
     claudeClient: !!anthropic,
     port: PORT,
-    nodeVersion: process.version,
+    model: 'claude-3-5-haiku-20241022',
     features: {
-      tokenLimiting: 'Enabled ✅',
-      topicFiltering: 'Enabled ✅',
-      contextAwareness: 'Enabled ✅',
-      curriculumAlignment: 'NSW Year 7 ✅',
-      autoTopicDetection: 'Enabled ✅',
-      userTracking: 'Enabled ✅'
+      optimizedPrompts: 'Enabled ✅',
+      limitedHistory: 'Enabled ✅',
+      reducedTokens: 'Enabled ✅'
     }
   });
 });
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`🔗 Health check: http://localhost:${PORT}/`);
-  console.log(`🔍 Debug info: http://localhost:${PORT}/debug`);
+  console.log('🤖 Claude 3.5 Haiku ready - optimized for low token usage!');
   
-  if (anthropic) {
-    console.log('🤖 Claude AI ready to help students!');
-  } else {
-    console.log('📝 Running in fallback mode - add CLAUDE_API_KEY to enable AI');
-  }
-  
-  console.log('\n🛡️  PROTECTIONS ENABLED:');
-  console.log('✅ Input token limiting (3000 max)');
-  console.log('✅ Output token limiting (3000 max)');
-  console.log('✅ Topic filtering (blocks off-topic)');
-  console.log('✅ Context awareness (Year 7 NSW)');
-  console.log('✅ Curriculum alignment');
-  console.log('✅ Auto topic detection');
-  console.log('✅ User tracking');
+  console.log('\n🛡️  OPTIMIZATIONS ENABLED:');
+  console.log('✅ Short system prompts (~25 tokens vs 1800)');
+  console.log('✅ Claude 3.5 Haiku (80% cheaper)');
+  console.log('✅ Limited conversation history');
+  console.log('✅ Reduced max output tokens');
 });
 
 module.exports = app;
