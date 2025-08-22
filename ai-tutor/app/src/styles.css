@@ -35,6 +35,11 @@
   .worksheet-settings { flex-basis: 640px !important; max-width: 640px !important; }
 }
 
+.messages-area {
+  overflow-y: auto;
+  max-height: calc(100vh - 200px); /* Adjust based on your layout */
+  scroll-behavior: smooth;
+}
 
 * {
   margin: 0;

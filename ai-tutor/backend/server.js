@@ -1,4 +1,6 @@
 /* eslint-disable no-console */
+require("dotenv").config();
+const key = process.env.CLAUDE_API_KEY;
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();

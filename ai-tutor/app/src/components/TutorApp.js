@@ -1,5 +1,9 @@
 // src/components/TutorApp.js
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
+import InlineGeometryCanvas from './InlineGeometryCanvas';
+import CameraCapture from './CameraCapture';
+import { detectGeometryProblem } from './geometryUtils';
+import { processGeometryPhoto } from './photoGeometryProcessor';
 
 function TutorApp({ userProfile, onLogout, setUserProfile }) {
   // ---- App state ----
@@ -7,6 +11,12 @@ function TutorApp({ userProfile, onLogout, setUserProfile }) {
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isPlaying, setIsPlaying] = useState(null);
+  const [showCamera, setShowCamera] = useState(false);
+  const [isProcessingPhoto, setIsProcessingPhoto] = useState(false);
+
+  // ---- Refs for auto-scroll ----
+  const messagesEndRef = useRef(null);
+  const messagesAreaRef = useRef(null);
 
   const [worksheetSettings, setWorksheetSettings] = useState({
     topic: 'algebra',
@@ -14,7 +24,7 @@ function TutorApp({ userProfile, onLogout, setUserProfile }) {
     questionCount: 10,
   });
   const [isGenerating, setIsGenerating] = useState(false);
-  const [generatedHtml, setGeneratedHtml] = useState(''); // preview HTML
+  const [generatedHtml, setGeneratedHtml] = useState('');
 
   // ---- Profile (fallbacks) ----
   const profile = userProfile || {
@@ -24,6 +34,28 @@ function TutorApp({ userProfile, onLogout, setUserProfile }) {
     tokensLimit: 5000,
     streakDays: 5,
   };
+
+  // ---- Auto-scroll function ----
+  const scrollToBottom = () => {
+    requestAnimationFrame(() => {
+      if (messagesAreaRef.current) {
+        messagesAreaRef.current.scrollTop = messagesAreaRef.current.scrollHeight;
+      }
+    });
+  };
+
+  // ---- Auto-scroll when messages change ----
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  // ---- Also scroll after geometry canvas is added ----
+  useEffect(() => {
+    const hasGeometryMessage = messages.some(m => m.sender === 'geometry');
+    if (hasGeometryMessage) {
+      setTimeout(scrollToBottom, 200);
+    }
+  }, [messages]);
 
   // ---- Fetch token usage on mount / user change ----
   useEffect(() => {
@@ -49,6 +81,98 @@ function TutorApp({ userProfile, onLogout, setUserProfile }) {
     fetchTokenUsage();
   }, [profile.name, profile.childName, setUserProfile]);
 
+  // ---- Photo handling ----
+  const handlePhotoCapture = async (imageFile, imageDataUrl) => {
+    setIsProcessingPhoto(true);
+    
+    try {
+      const result = await processGeometryPhoto(imageFile, imageDataUrl);
+      
+      if (result.success && result.geometryResult) {
+        const photoMsg = {
+          id: messages.length + 1,
+          text: `Photo captured: ${result.analysis.description}`,
+          sender: 'user',
+          timestamp: new Date(),
+          photoDataUrl: imageDataUrl
+        };
+        
+        const geometryMsg = {
+          id: messages.length + 2,
+          sender: 'geometry',
+          timestamp: new Date(),
+          shape: result.geometryResult.shape,
+          dimensions: result.geometryResult.dimensions
+        };
+        
+        setMessages(prev => [...prev, photoMsg, geometryMsg]);
+        
+        handleAIResponse(`I took a photo of a geometry problem: ${result.analysis.description}. Can you help me solve it step by step?`);
+        
+      } else {
+        const errorMsg = {
+          id: messages.length + 1,
+          text: `Photo captured, but I couldn't detect a clear geometry problem. Could you describe what you see in the image?`,
+          sender: 'bot',
+          timestamp: new Date(),
+        };
+        setMessages(prev => [...prev, errorMsg]);
+      }
+      
+    } catch (error) {
+      console.error('Photo processing error:', error);
+      const errorMsg = {
+        id: messages.length + 1,
+        text: `Photo captured, but there was an issue processing it. Please try again or describe the problem instead.`,
+        sender: 'bot',
+        timestamp: new Date(),
+      };
+      setMessages(prev => [...prev, errorMsg]);
+    } finally {
+      setIsProcessingPhoto(false);
+    }
+  };
+  
+  const handleAIResponse = async (messageText) => {
+    try {
+      const resp = await fetch('http://localhost:3001/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: messageText,
+          subject: 'Mathematics',
+          yearLevel: 7,
+          curriculum: 'NSW',
+          userId: profile.childName || profile.name || 'Alex',
+        }),
+      });
+
+      const data = await resp.json();
+      
+      if (resp.ok) {
+        if (data.tokens && setUserProfile) {
+          setUserProfile(prev => ({
+            ...prev,
+            tokensUsed: data.tokens.totalUsed || data.tokens.userTotal || prev.tokensUsed,
+            tokensLimit: data.tokens.limit || prev.tokensLimit,
+          }));
+        }
+
+        setMessages(prev => [
+          ...prev,
+          {
+            id: prev.length + 1,
+            text: data.response,
+            sender: 'bot',
+            timestamp: new Date(),
+          },
+        ]);
+      }
+    } catch (error) {
+      console.error('AI Response error:', error);
+    }
+  };
+
   // ---- TTS ----
   const speakMessage = (text, messageId) => {
     window.speechSynthesis.cancel();
@@ -73,7 +197,7 @@ function TutorApp({ userProfile, onLogout, setUserProfile }) {
     window.speechSynthesis.speak(u);
   };
 
-  // ---- Worksheet generation (server returns {html} or {questions}) ----
+  // ---- Worksheet generation ----
   const handleGenerateWorksheet = async () => {
     setIsGenerating(true);
     try {
@@ -97,7 +221,6 @@ function TutorApp({ userProfile, onLogout, setUserProfile }) {
 
       const data = await resp.json();
 
-      // Accept { html } OR { questions: string[] }
       if (typeof data.html === 'string') {
         setGeneratedHtml(data.html);
       } else if (Array.isArray(data.questions)) {
@@ -125,7 +248,7 @@ function TutorApp({ userProfile, onLogout, setUserProfile }) {
           difficulty: worksheetSettings.difficulty,
           questionCount: worksheetSettings.questionCount,
           yearLevel: 7,
-          format: fmt, // 'pdf' | 'docx'
+          format: fmt,
         }),
       });
 
@@ -158,13 +281,42 @@ function TutorApp({ userProfile, onLogout, setUserProfile }) {
       sender: 'user',
       timestamp: new Date(),
     };
+    
+    const geometryDetection = detectGeometryProblem(inputMessage);
+    
     const history = [...messages, newMsg];
     setMessages(history);
     setInputMessage('');
 
+    setTimeout(() => {
+      if (messagesAreaRef.current) {
+        messagesAreaRef.current.scrollTop = messagesAreaRef.current.scrollHeight;
+      }
+    }, 50);
+
+    if (geometryDetection) {
+      console.log('Geometry problem detected:', geometryDetection);
+      
+      const geometryMsg = {
+        id: history.length + 1,
+        sender: 'geometry',
+        timestamp: new Date(),
+        shape: geometryDetection.shape,
+        dimensions: geometryDetection.dimensions
+      };
+      
+      setMessages(prev => {
+        const updated = [...prev, geometryMsg];
+        setTimeout(() => {
+          if (messagesAreaRef.current) {
+            messagesAreaRef.current.scrollTop = messagesAreaRef.current.scrollHeight;
+          }
+        }, 150);
+        return updated;
+      });
+    }
+
     try {
-      // The backend now manages conversation history internally
-      // We just need to send the current message and user info
       const resp = await fetch('http://localhost:3001/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -174,14 +326,11 @@ function TutorApp({ userProfile, onLogout, setUserProfile }) {
           yearLevel: 7,
           curriculum: 'NSW',
           userId: profile.childName || profile.name || 'Alex',
-          // Remove conversationHistory - backend manages this now
-          // resetContext: false // Only send this if you want to reset
         }),
       });
 
       const data = await resp.json();
       
-      // Log debug info to help troubleshoot
       console.log('Chat response:', {
         conversationLength: data.conversationLength,
         detectedTopic: data.detectedTopic,
@@ -190,7 +339,6 @@ function TutorApp({ userProfile, onLogout, setUserProfile }) {
       });
 
       if (resp.ok) {
-        // Update token usage from backend response
         if (data.tokens && setUserProfile) {
           setUserProfile(prev => ({
             ...prev,
@@ -199,19 +347,27 @@ function TutorApp({ userProfile, onLogout, setUserProfile }) {
           }));
         }
 
-        // Add the bot response
-        setMessages(prev => [
-          ...prev,
-          {
-            id: prev.length + 1,
-            text: data.response,
-            sender: 'bot',
-            timestamp: new Date(),
-            // Store debug info for troubleshooting
-            debug: data.debug,
-            conversationLength: data.conversationLength
-          },
-        ]);
+        setMessages(prev => {
+          const updated = [
+            ...prev,
+            {
+              id: prev.length + 1,
+              text: data.response,
+              sender: 'bot',
+              timestamp: new Date(),
+              debug: data.debug,
+              conversationLength: data.conversationLength
+            },
+          ];
+          
+          setTimeout(() => {
+            if (messagesAreaRef.current) {
+              messagesAreaRef.current.scrollTop = messagesAreaRef.current.scrollHeight;
+            }
+          }, 100);
+          
+          return updated;
+        });
       } else {
         console.error('Chat API error:', data);
         setMessages(prev => [
@@ -250,7 +406,6 @@ function TutorApp({ userProfile, onLogout, setUserProfile }) {
         }),
       });
       
-      // Clear local messages
       setMessages([{
         id: 1,
         text: "Great! I've cleared our conversation history. What new math problem would you like to work on?",
@@ -397,13 +552,11 @@ What ${subject.toLowerCase()} problem are you working on today?`,
               {generatedHtml ? (
                 <>
                   <h4>
-                    Year 7 {worksheetSettings.topic} — {worksheetSettings.difficulty} Level
+                    Year 7 {worksheetSettings.topic} – {worksheetSettings.difficulty} Level
                   </h4>
 
-                  {/* Render worksheet preview */}
                   <div dangerouslySetInnerHTML={{ __html: generatedHtml }} />
 
-                  {/* Export buttons */}
                   <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>
                     <button
                       className="export-button"
@@ -436,7 +589,7 @@ What ${subject.toLowerCase()} problem are you working on today?`,
   if (selectedSubject) {
     return (
       <div className="app chat-mode">
-      <div className="chat-header">
+        <div className="chat-header">
           <button className="back-button" onClick={handleBackToSubjects}>
             ← Back
           </button>
@@ -456,7 +609,7 @@ What ${subject.toLowerCase()} problem are you working on today?`,
                 fontSize: '14px'
               }}
             >
-              🔄 Reset
+              Reset
             </button>
             <button className="logout-button" onClick={handleLogout}>
               Logout
@@ -465,36 +618,50 @@ What ${subject.toLowerCase()} problem are you working on today?`,
         </div>
 
         <div className="chat-container">
-          <div className="messages-area">
+          <div className="messages-area" ref={messagesAreaRef}>
             {messages.map(m => (
               <div key={m.id} className={`message ${m.sender}`}>
-                <div className="message-avatar">
-                  {m.sender === 'bot'
-                    ? 'SB'
-                    : (profile.childName || profile.name || 'U').charAt(0)}
-                </div>
-                <div className="message-content">
-                  <div className="message-text">{m.text}</div>
-                  <div className="message-footer">
-                    <div className="message-time">
-                      {m.timestamp.toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
+                {(m.sender === 'user' || m.sender === 'bot') && (
+                  <>
+                    <div className="message-avatar">
+                      {m.sender === 'bot'
+                        ? 'SB'
+                        : (profile.childName || profile.name || 'U').charAt(0)}
                     </div>
-                    {m.sender === 'bot' && (
-                      <button
-                        className={`voice-button ${isPlaying === m.id ? 'playing' : ''}`}
-                        onClick={() => speakMessage(m.text, m.id)}
-                        title={isPlaying === m.id ? 'Stop audio' : 'Listen to message'}
-                      >
-                        {isPlaying === m.id ? '⏸️' : '🔊'}
-                      </button>
-                    )}
+                    <div className="message-content">
+                      <div className="message-text">{m.text}</div>
+                      <div className="message-footer">
+                        <div className="message-time">
+                          {m.timestamp.toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </div>
+                        {m.sender === 'bot' && (
+                          <button
+                            className={`voice-button ${isPlaying === m.id ? 'playing' : ''}`}
+                            onClick={() => speakMessage(m.text, m.id)}
+                            title={isPlaying === m.id ? 'Stop audio' : 'Listen to message'}
+                          >
+                            {isPlaying === m.id ? '⏸️' : '🔊'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+                
+                {m.sender === 'geometry' && (
+                  <div className="message-content" style={{ marginLeft: '0px', maxWidth: '100%' }}>
+                    <InlineGeometryCanvas 
+                      shape={m.shape} 
+                      dimensions={m.dimensions} 
+                    />
                   </div>
-                </div>
+                )}
               </div>
             ))}
+            <div ref={messagesEndRef} />
           </div>
 
           <div className="chat-input-container">
@@ -509,16 +676,59 @@ What ${subject.toLowerCase()} problem are you working on today?`,
                   placeholder="Tell me what you're working on or type your solution step by step..."
                 />
               </div>
-              <button
-                className="send-button"
-                onClick={handleSendMessage}
-                disabled={!inputMessage.trim()}
-              >
-                Send
-              </button>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={() => setShowCamera(true)}
+                  style={{
+                    background: '#28a745',
+                    border: 'none',
+                    borderRadius: '4px',
+                    padding: '8px 12px',
+                    color: 'white',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                  title="Take a photo of your geometry problem"
+                >
+                  Photo
+                </button>
+                <button
+                  className="send-button"
+                  onClick={handleSendMessage}
+                  disabled={!inputMessage.trim()}
+                >
+                  Send
+                </button>
+              </div>
             </div>
           </div>
         </div>
+
+        {showCamera && (
+          <CameraCapture
+            onPhotoCapture={handlePhotoCapture}
+            onClose={() => setShowCamera(false)}
+          />
+        )}
+
+        {isProcessingPhoto && (
+          <div style={{
+            position: 'fixed',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            backgroundColor: 'rgba(0,0,0,0.8)',
+            color: 'white',
+            padding: '20px',
+            borderRadius: '8px',
+            zIndex: 999
+          }}>
+            Processing photo...
+          </div>
+        )}
       </div>
     );
   }
