@@ -7,8 +7,12 @@ require('dotenv').config();
 let cheerio = null;
 try { cheerio = require('cheerio'); } catch (_) { /* optional */ }
 
+
 // Add katex for LaTeX rendering
 const katex = require('katex');
+
+// Load Year 7 curriculum
+const curriculum = require('./year7-curriculum.json');
 
 // For DOCX and PDF output
 const {
@@ -27,6 +31,7 @@ const PORT = 3001;
 // In-memory storage (use Redis/DB in production)
 const userTokenUsage = new Map();
 const conversations = new Map();
+const curriculumCache = new Map();
 
 // === Anthropic (Claude) init ===
 let anthropic = null;
@@ -46,27 +51,327 @@ try {
 app.use(cors());
 app.use(express.json());
 
-// --- Helpers ---
-function estimateTokens(text) {
-  return Math.ceil((text || '').length / 4); // rough
+// --- Curriculum Integration Functions ---
+function buildYear7SystemPrompt(topic) {
+  // Find topic-specific data
+  const topicData = curriculum.topic_catalog.find(t => 
+    t.topic.toLowerCase().includes(topic.toLowerCase()) ||
+    t.subtopics.some(sub => topic.toLowerCase().includes(sub.toLowerCase()))
+  );
+  
+  // Build core rules
+  const coreRules = curriculum.system_rules.join(' ');
+  const styleGuide = curriculum.style_guidelines.tone + ', ' + curriculum.style_guidelines.format.join(' then ');
+  
+  let topicContext = '';
+  let scaffoldInstructions = '';
+  
+  if (topicData) {
+    topicContext = '\nTOPIC: ' + topicData.topic;
+    topicContext += '\nSCOPE: ' + topicData.subtopics.slice(0, 4).join(', ');
+    topicContext += '\nALLOWED: ' + topicData.allowed_verbs.join(', ');
+    
+    // Enhanced scaffold matching - more specific and comprehensive
+    const relevantScaffolds = findRelevantScaffolds(topicData, topic);
+    
+    if (relevantScaffolds.length > 0) {
+      scaffoldInstructions = '\n\nCRITICAL SCAFFOLD STEPS - YOU MUST GUIDE STUDENTS THROUGH THESE EXACT STEPS:';
+      
+      relevantScaffolds.forEach(({ key, steps, priority }) => {
+        scaffoldInstructions += `\n\nFor ${key.replace(/_/g, ' ')} problems (Priority: ${priority}):`;
+        steps.forEach((step, index) => {
+          scaffoldInstructions += `\n  Step ${index + 1}: ${step}`;
+        });
+        scaffoldInstructions += '\n  → Ask questions to guide students through EACH step';
+        scaffoldInstructions += '\n  → Do NOT skip steps or give direct answers';
+        scaffoldInstructions += '\n  → Wait for student response before proceeding to next step';
+      });
+      
+      scaffoldInstructions += '\n\nWhen you recognize a problem that matches these scaffolds:';
+      scaffoldInstructions += '\n1. Identify which scaffold applies';
+      scaffoldInstructions += '\n2. Ask a question that leads to Step 1';
+      scaffoldInstructions += '\n3. Only proceed to the next step after student engagement';
+      scaffoldInstructions += '\n4. Use the scaffold steps as your roadmap for questioning';
+    }
+    
+    // Add misconception warning
+    const misconception = curriculum.common_misconceptions.find(m => 
+      topicData.topic.includes(m.topic)
+    );
+    if (misconception) {
+      topicContext += '\nWATCH: ' + misconception.pattern + ' - fix: ' + misconception.fix;
+    }
+  }
+  
+  const fullPrompt = 'You are StudyBuddy, NSW Year 7 mathematics tutor.\n\n' +
+    'CORE RULES: ' + coreRules + '\n' +
+    'STYLE: ' + styleGuide + 
+    topicContext + 
+    scaffoldInstructions + '\n\n' +
+    'CRITICAL: Use Socratic method ONLY - ask guiding questions, NEVER give direct answers or final results.\n' +
+    'Never use emojis. Ask ONE question at a time. Guide discovery step by step.\n' +
+    'When teaching procedures, ask questions that lead students through the exact scaffold steps.\n' +
+    'ALWAYS follow the scaffold steps when they apply to the student\'s question.';
+  
+  return fullPrompt;
 }
 
-function detectMathematicalTopic(message, existingConversation = null) {
+function findRelevantScaffolds(topicData, topic) {
+  const scaffolds = [];
+  const topicLower = topic.toLowerCase();
+  
+  // Direct keyword matching with priority scoring
+  const scaffoldMatches = [
+    { key: 'fractions_to_decimals', keywords: ['fraction to decimal', 'convert fraction', 'decimal conversion', '1/3 to decimal', 'turn fraction into decimal'], priority: 'HIGH' },
+    { key: 'fractions_add_sub', keywords: ['add fraction', 'subtract fraction', 'fraction addition', 'fraction subtraction'], priority: 'HIGH' },
+    { key: 'two_step_equations', keywords: ['solve equation', 'two step', 'equation with', 'find x'], priority: 'HIGH' },
+    { key: 'percent_of_quantity', keywords: ['percent of', 'percentage of', '% of', 'find percentage'], priority: 'HIGH' },
+    { key: 'area_rectangle', keywords: ['area rectangle', 'rectangle area', 'length width'], priority: 'MEDIUM' },
+    { key: 'area_triangle', keywords: ['area triangle', 'triangle area', 'base height'], priority: 'MEDIUM' },
+    { key: 'area_parallelogram', keywords: ['area parallelogram', 'parallelogram area'], priority: 'MEDIUM' },
+    { key: 'area_trapezium', keywords: ['area trapezium', 'trapezium area', 'parallel sides'], priority: 'MEDIUM' },
+    { key: 'angles_with_parallel_lines', keywords: ['parallel lines', 'corresponding angle', 'alternate angle'], priority: 'MEDIUM' },
+    { key: 'solving_proportions', keywords: ['proportion', 'ratio problem', 'cross multiply'], priority: 'MEDIUM' }
+  ];
+  
+  // Check for direct matches
+  scaffoldMatches.forEach(({ key, keywords, priority }) => {
+    if (keywords.some(keyword => topicLower.includes(keyword))) {
+      if (curriculum.scaffolds[key]) {
+        scaffolds.push({
+          key,
+          steps: curriculum.scaffolds[key],
+          priority,
+          matchType: 'direct'
+        });
+      }
+    }
+  });
+  
+  // If no direct matches, check topic and subtopic matches
+  if (scaffolds.length === 0 && topicData) {
+    Object.keys(curriculum.scaffolds).forEach(scaffoldKey => {
+      const scaffoldTopic = scaffoldKey.replace(/_/g, ' ').toLowerCase();
+      
+      // Check if scaffold topic is in the main topic or subtopics
+      const isRelevant = 
+        topicData.topic.toLowerCase().includes(scaffoldTopic) ||
+        topicData.subtopics.some(sub => 
+          sub.toLowerCase().includes(scaffoldTopic) || 
+          scaffoldTopic.includes(sub.toLowerCase())
+        );
+      
+      if (isRelevant) {
+        scaffolds.push({
+          key: scaffoldKey,
+          steps: curriculum.scaffolds[scaffoldKey],
+          priority: 'LOW',
+          matchType: 'topic'
+        });
+      }
+    });
+  }
+  
+  // Sort by priority and return unique scaffolds
+  const priorityOrder = { HIGH: 3, MEDIUM: 2, LOW: 1 };
+  return scaffolds
+    .filter((scaffold, index, self) => 
+      index === self.findIndex(s => s.key === scaffold.key)
+    )
+    .sort((a, b) => priorityOrder[b.priority] - priorityOrder[a.priority])
+    .slice(0, 3); // Limit to top 3 most relevant scaffolds
+}
+
+
+
+// Enhanced message detection for fraction-to-decimal conversion
+function detectFractionToDecimalRequest(message) {
+  const patterns = [
+    /convert.*(\d+\/\d+).*decimal/i,
+    /(\d+\/\d+).*to.*decimal/i,
+    /change.*(\d+\/\d+).*decimal/i,
+    /turn.*(\d+\/\d+).*decimal/i,
+    /(\d+\/\d+).*as.*decimal/i,
+    /decimal.*form.*(\d+\/\d+)/i
+  ];
+  
+  return patterns.some(pattern => pattern.test(message));
+}
+
+
+// Function to handle fraction to decimal conversions with scaffold
+function handleFractionToDecimalWithScaffold(fraction, conversation) {
+  const scaffold = curriculum.scaffolds.fractions_to_decimals;
+  
+  // Determine which step we're on based on conversation history
+  const currentStep = determineCurrentScaffoldStep(conversation, scaffold);
+  
+  const socraticQuestions = {
+    0: `Let's convert ${fraction} to a decimal! First, can you try multiplying the denominator ${fraction.split('/')[1]} by something to make it 10, 100, or 1000? What happens when you try?`,
+    1: `Since we can't easily make ${fraction.split('/')[1]} into 10, 100, or 1000, we'll use long division. Can you set up a division bracket like this: ${fraction.split('/')[1]})${fraction.split('/')[0]}.000000 - what do you think the decimal point in the answer should go?`,
+    2: `Perfect! Now, since ${fraction.split('/')[1]} is bigger than ${fraction.split('/')[0]}, we can't divide yet. What should we do to the 1 to make it bigger so we can divide by ${fraction.split('/')[1]}?`,
+    3: `Right! We use 10 (adding the first zero). Now, what's 10 ÷ ${fraction.split('/')[1]}? What's the quotient and what's the remainder?`,
+    4: `Great! So we get ${Math.floor(10/parseInt(fraction.split('/')[1]))} with remainder ${10 % parseInt(fraction.split('/')[1])}. Now what do we do with that remainder ${10 % parseInt(fraction.split('/')[1])}? What's the next step?`,
+    5: `Exactly! We bring down the next zero to make ${10 % parseInt(fraction.split('/')[1])}0 again. What do you notice? Are we getting the same division problem again?`,
+    6: `You're discovering a pattern! What do you think will happen if we keep dividing? What does this tell us about the decimal?`
+  };
+  
+  return socraticQuestions[currentStep] || socraticQuestions[0];
+}
+
+function determineCurrentScaffoldStep(conversation, scaffold) {
+  // Simple logic to determine which step based on recent messages
+  // This could be enhanced with more sophisticated tracking
+  const recentMessages = conversation.messages.slice(-4);
+  const lastUserMessage = recentMessages.find(m => m.role === 'user')?.content.toLowerCase() || '';
+  
+  if (lastUserMessage.includes('division') || lastUserMessage.includes('divide')) {
+    return 2;
+  }
+  if (lastUserMessage.includes('carry') || lastUserMessage.includes('remainder')) {
+    return 4;
+  }
+  if (lastUserMessage.includes('pattern') || lastUserMessage.includes('repeat')) {
+    return 5;
+  }
+  
+  return 0; // Start at the beginning
+}
+
+
+function checkYear7Scope(message, topic) {
+  const msg = message.toLowerCase();
+  
+  // First check if it's asking for a definition/explanation of a Year 7 term
+  const definitionKeywords = ['what is', 'define', 'meaning of', 'explain', 'definition'];
+  const isDefinitionRequest = definitionKeywords.some(keyword => msg.includes(keyword));
+  
+  if (isDefinitionRequest) {
+    // Check against curriculum glossary and common Year 7 math terms
+    const year7Terms = [
+      // From curriculum glossary verbs
+      ...curriculum.glossary.verbs.map(v => v.term),
+      // Common Year 7 algebra terms
+      'coefficient', 'variable', 'constant', 'term', 'expression', 'equation',
+      'factor', 'multiple', 'prime', 'fraction', 'decimal', 'percentage',
+      'ratio', 'area', 'perimeter', 'angle', 'parallel', 'perpendicular',
+      'mean', 'median', 'mode', 'range', 'probability'
+    ];
+    
+    const termRequested = year7Terms.find(term => 
+      msg.includes(term.toLowerCase())
+    );
+    
+    if (termRequested) {
+      console.log(`📖 Definition request for Year 7 term: ${termRequested}`);
+      return { inScope: true, definitionRequest: termRequested };
+    }
+  }
+  
+  // Check if topic exists in Year 7 curriculum
+  const validTopic = curriculum.topic_catalog.some(t => 
+    t.topic.toLowerCase().includes(topic.toLowerCase()) ||
+    t.subtopics.some(sub => topic.toLowerCase().includes(sub.toLowerCase()))
+  );
+  
+  if (!validTopic) {
+    return {
+      inScope: false,
+      refusal: curriculum.refusal_messages[0].replace('<prerequisite>', 'basic Year 7 concepts').replace('<suggestion>', 'a Year 7 topic like fractions or basic algebra')
+    };
+  }
+  
+  return { inScope: true };
+}
+
+function handleTopicChange(conversation, newTopic, message) {
+  const topicChanged = conversation.subject !== newTopic;
+  
+  if (topicChanged) {
+    console.log(`📚 Topic changed: ${conversation.subject} → ${newTopic}`);
+    
+    // Clear old curriculum context
+    conversation.curriculumLoaded = false;
+    conversation.lastCurriculumTopic = null;
+    
+    // Update conversation subject
+    conversation.subject = newTopic;
+    
+    return true; // Indicates curriculum context needed
+  }
+  
+  return false;
+}
+
+function getYear7Definition(term) {
+  const definitions = {
+    'coefficient': {
+      socratic: "Great question! Look at this expression: 3x + 5. What number do you see in front of the x? What do you think that number might be called?",
+      context: "In algebra, it's the number that multiplies the variable"
+    },
+    'variable': {
+      socratic: "Think about this: if you have x apples and I don't tell you how many x is, what would you call x? What makes it different from a regular number?",
+      context: "It's a letter that represents an unknown number that can change"
+    },
+    'constant': {
+      socratic: "In the expression 2x + 7, one part changes when x changes, but what about the 7? What stays the same no matter what x equals?",
+      context: "It's a number that doesn't change in an expression"
+    },
+    'term': {
+      socratic: "If I write 3x + 5 - 2y, I can break this into separate pieces. How many separate pieces do you see? What would you call each piece?",
+      context: "Each separate part of an expression, connected by + or - signs"
+    },
+    'factor': {
+      socratic: "What numbers can you multiply together to get 12? What would you call those numbers that multiply to make 12?",
+      context: "Numbers that multiply together to give another number"
+    },
+    'multiple': {
+      socratic: "If you count by 3s: 3, 6, 9, 12... what would you call these numbers in relation to 3?",
+      context: "Numbers you get when you multiply by whole numbers"
+    }
+  };
+  
+  const def = definitions[term.toLowerCase()];
+  return def || null;
+}
+
+function getCurriculumContext(topic) {
+  if (curriculumCache.has(topic)) {
+    return curriculumCache.get(topic);
+  }
+  
+  const topicData = curriculum.topic_catalog.find(t => 
+    t.topic.toLowerCase().includes(topic.toLowerCase())
+  );
+  
+  if (!topicData) {
+    curriculumCache.set(topic, '');
+    return '';
+  }
+  
+  const context = `Y7 ${topicData.topic}: ${topicData.subtopics.slice(0, 3).join(', ')}`;
+  curriculumCache.set(topic, context);
+  return context;
+}
+
+// --- Enhanced Topic Detection with Curriculum ---
+function detectMathematicalTopicWithCurriculum(message, existingConversation = null) {
   const msg = (message || '').toLowerCase();
   
   // If we have an existing conversation and this looks like a follow-up,
   // keep the same topic to maintain context
   if (existingConversation && existingConversation.subject !== 'Mathematics') {
     const followUpIndicators = [
-      // Short responses that are clearly continuing a conversation
       /^\d+$/, // Just a number
       /^(yes|no|ok|right|correct|wrong)$/,
       /^(we|do|can|should|will|then|next|now|it|this|that)/,
-      // Mathematical operations without context
-      /^[+\-*/=().\d\s]+$/
+      /^[+\-*/=().\d\s]+$/,
+      // Add more follow-up patterns for definitions/explanations
+      /^(not sure|don't know|confused|help|what|how)/,
+      /^(i think|maybe|perhaps|could it be)/
     ];
     
-    const isFollowUp = followUpIndicators.some(pattern => pattern.test(msg.trim())) || msg.length < 15;
+    const isFollowUp = followUpIndicators.some(pattern => pattern.test(msg.trim())) || msg.length < 20;
     
     if (isFollowUp) {
       console.log(`🔗 Detected follow-up question, maintaining topic: ${existingConversation.subject}`);
@@ -74,13 +379,28 @@ function detectMathematicalTopic(message, existingConversation = null) {
     }
   }
   
+  // First check against curriculum topics
+  for (const topicData of curriculum.topic_catalog) {
+    const topicKeywords = [
+      ...topicData.subtopics.map(s => s.toLowerCase()),
+      ...topicData.allowed_verbs.map(v => v.toLowerCase()),
+      topicData.topic.toLowerCase()
+    ];
+    
+    if (topicKeywords.some(keyword => msg.includes(keyword))) {
+      console.log(`📖 Curriculum match: ${topicData.topic}`);
+      return topicData.topic;
+    }
+  }
+  
+  // Fallback to original detection
   const topicPatterns = {
-    Algebra: ['equation', 'solve', 'x', 'y', 'variable', 'algebra', '=', 'unknown'],
-    Geometry: ['angle', 'triangle', 'area', 'perimeter', 'shape', 'circle', 'rectangle'],
-    Fractions: ['fraction', 'decimal', 'percentage', '/', 'percent', 'ratio'],
+    'Algebra & Equations': ['equation', 'solve', 'x', 'y', 'variable', 'algebra', '=', 'unknown', 'coefficient', 'term', 'constant'],
+    'Geometry': ['angle', 'triangle', 'area', 'perimeter', 'shape', 'circle', 'rectangle'],
+    'Fractions & Percentages': ['fraction', 'decimal', 'percentage', '/', 'percent', 'ratio'],
     'Number Operations': ['add', 'subtract', 'multiply', 'divide', 'division', 'multiplication', 'times', 'plus', 'minus'],
-    Indices: ['power', 'exponent', 'square', 'cube', '^', 'index', 'indices'],
-    Statistics: ['data', 'graph', 'mean', 'median', 'average', 'mode', 'range'],
+    'Indices': ['power', 'exponent', 'square', 'cube', '^', 'index', 'indices'],
+    'Analysing Data': ['data', 'graph', 'mean', 'median', 'average', 'mode', 'range'],
     'Number Theory': ['prime', 'factor', 'multiple', 'divisible', 'remainder'],
   };
   
@@ -92,6 +412,15 @@ function detectMathematicalTopic(message, existingConversation = null) {
   }
   
   return bestTopic;
+}
+
+// --- Helpers ---
+function estimateTokens(text) {
+  return Math.ceil((text || '').length / 4); // rough
+}
+
+function detectMathematicalTopic(message, existingConversation = null) {
+  return detectMathematicalTopicWithCurriculum(message, existingConversation);
 }
 
 function isOnTopic(message) {
@@ -143,35 +472,7 @@ function isOnTopic(message) {
 }
 
 function createSystemPrompt(subject, yearLevel, curriculum) {
-  return `You are StudyBuddy, a ${curriculum} Year ${yearLevel} mathematics tutor specializing in ${subject}.
-
-CORE PRINCIPLES:
-- Use the Socratic method exclusively - NEVER give direct answers
-- Ask guiding questions like "What do you notice?", "What happens if...?", "Can you tell me what this part means?"
-- Break complex problems into tiny, manageable steps
-- Wait for student responses before moving to the next step
-- If student is stuck, give the tiniest hint possible, then ask another question
-- Praise effort and thinking process, not just correct answers
-- Keep responses under 80 words
-- Stay focused on mathematics only
-- Remember previous parts of our conversation to build understanding
-
-CONVERSATION STYLE:
-- Speak like you're explaining to a friend who's learning
-- Use simple, clear language
-- Be encouraging and patient
-- Ask one question at a time
-- Help them discover the answer themselves
-- Use phrases like "What do you think?", "Can you spot a pattern?", "What would happen if...?"
-
-EXAMPLE RESPONSES:
-Instead of: "To solve 2x + 5 = 15, subtract 5 from both sides"
-Say: "I see you have 2x + 5 = 15. What do you think we could do to get x by itself? What's the first step that comes to mind?"
-
-Instead of: "The area of a circle is πr²"
-Say: "Great question about circles! If you had a circle with radius 3, what do you think we'd need to know to find how much space it takes up?"
-
-You maintain context of our entire conversation to guide learning progressively.`;
+  return buildYear7SystemPrompt(subject);
 }
 
 function getConversationKey(userId, subject, yearLevel) {
@@ -204,7 +505,18 @@ async function getWorksheetLatexFromClaude({ topic, difficulty, questionCount, y
     return '\\begin{enumerate}\n' + sample.join('\n') + '\n\\end{enumerate}';
   }
 
-  const prompt = 'Create ' + questionCount + ' ' + difficulty + ' ' + topic + ' questions for Year ' + yearLevel + '.\n' +
+  // Enhanced prompt with curriculum awareness
+  const topicData = curriculum.topic_catalog.find(t => 
+    t.topic.toLowerCase().includes(topic.toLowerCase())
+  );
+
+  let curriculumGuidance = '';
+  if (topicData) {
+    curriculumGuidance = `Focus on: ${topicData.subtopics.slice(0, 3).join(', ')}. Use verbs: ${topicData.allowed_verbs.slice(0, 4).join(', ')}.`;
+  }
+
+  const prompt = 'Create ' + questionCount + ' ' + difficulty + ' ' + topic + ' questions for NSW Year ' + yearLevel + ' curriculum.\n' +
+    curriculumGuidance + '\n' +
     'Return ONLY valid LaTeX using enumerate environment like:\n\n' +
     '\\begin{enumerate}\n' +
     '  \\item Solve for $x$: $2x + 5 = 15$\n' +
@@ -399,6 +711,7 @@ app.get('/', (req, res) => {
     claudeConfigured: !!anthropic,
     timestamp: new Date().toISOString(),
     activeConversations: conversations.size,
+    curriculumLoaded: !!curriculum,
   });
 });
 
@@ -477,7 +790,7 @@ app.get('/api/user/:userId/tokens', (req, res) => {
   });
 });
 
-// IMPROVED CHAT WITH BETTER CONTEXT MANAGEMENT
+// IMPROVED CHAT WITH CURRICULUM INTEGRATION
 app.post('/api/chat', async (req, res) => {
   console.log('\n🚀 === CHAT REQUEST ===');
 
@@ -511,9 +824,74 @@ app.post('/api/chat', async (req, res) => {
     console.log(`⏰ Most recent conversation: ${mostRecentKey}, ${Math.round(timeSinceLastActive / 1000 / 60)} minutes ago`);
   }
 
-  // Detect topic with context awareness
+  // Detect topic with curriculum awareness
   const detectedTopic = detectMathematicalTopic(message, mostRecentConversation);
   console.log(`🎯 Topic: ${detectedTopic}`);
+
+  // Check Year 7 scope
+  const scopeCheck = checkYear7Scope(message, detectedTopic);
+  
+  // Handle definition requests with Socratic responses BEFORE scope check
+  if (scopeCheck.definitionRequest) {
+    const definition = getYear7Definition(scopeCheck.definitionRequest);
+    if (definition) {
+      console.log(`📖 Providing Socratic definition for: ${scopeCheck.definitionRequest}`);
+      
+      // Create or update conversation for this definition topic
+      let definitionConversation = conversations.get(getConversationKey(userId, 'Algebra & Equations', yearLevel));
+      if (!definitionConversation) {
+        definitionConversation = {
+          messages: [],
+          totalTokens: 0,
+          subject: 'Algebra & Equations',
+          yearLevel,
+          curriculum,
+          createdAt: new Date(),
+          lastActive: new Date(),
+          curriculumLoaded: true,
+          lastCurriculumTopic: 'Algebra & Equations'
+        };
+      }
+      
+      // Add the definition exchange to conversation
+      definitionConversation.messages.push({
+        role: 'user',
+        content: message,
+        timestamp: new Date()
+      });
+      
+      definitionConversation.messages.push({
+        role: 'assistant', 
+        content: definition.socratic,
+        timestamp: new Date()
+      });
+      
+      definitionConversation.lastActive = new Date();
+      conversations.set(getConversationKey(userId, 'Algebra & Equations', yearLevel), definitionConversation);
+      
+      return res.json({
+        response: definition.socratic,
+        subject: 'Algebra & Equations',
+        detectedTopic: 'Algebra & Equations',
+        yearLevel,
+        curriculum,
+        conversationLength: definitionConversation.messages.length,
+        conversationId: getConversationKey(userId, 'Algebra & Equations', yearLevel),
+        definitionProvided: scopeCheck.definitionRequest
+      });
+    }
+  }
+  
+  if (!scopeCheck.inScope) {
+    console.log(`🚫 Out of Year 7 scope: ${detectedTopic}`);
+    return res.json({
+      response: scopeCheck.refusal,
+      error: 'out_of_scope',
+      detectedTopic,
+      yearLevel,
+      curriculum
+    });
+  }
 
   // Get conversation key
   const conversationKey = getConversationKey(userId, detectedTopic, yearLevel);
@@ -536,15 +914,17 @@ app.post('/api/chat', async (req, res) => {
       console.log(`🔗 Continuing recent conversation from ${mostRecentKey}`);
       conversation = mostRecentConversation;
       
-      // Update the conversation topic if it changed
-      conversation.subject = detectedTopic;
-      conversation.lastActive = new Date();
-      
-      // If the key is different, migrate the conversation
-      if (mostRecentKey !== conversationKey) {
-        conversations.delete(mostRecentKey);
-        conversations.set(conversationKey, conversation);
-        console.log(`📝 Migrated conversation from ${mostRecentKey} to ${conversationKey}`);
+      // Handle topic change
+      const topicChanged = handleTopicChange(conversation, detectedTopic, message);
+      if (topicChanged) {
+        conversation.lastActive = new Date();
+        
+        // If the key is different, migrate the conversation
+        if (mostRecentKey !== conversationKey) {
+          conversations.delete(mostRecentKey);
+          conversations.set(conversationKey, conversation);
+          console.log(`📝 Migrated conversation from ${mostRecentKey} to ${conversationKey}`);
+        }
       }
     }
   }
@@ -559,7 +939,9 @@ app.post('/api/chat', async (req, res) => {
       yearLevel,
       curriculum,
       createdAt: new Date(),
-      lastActive: new Date()
+      lastActive: new Date(),
+      curriculumLoaded: false,
+      lastCurriculumTopic: null
     };
   } else {
     console.log(`📚 Using existing conversation with ${conversation.messages.length} messages`);
@@ -578,7 +960,7 @@ app.post('/api/chat', async (req, res) => {
 
   if (!isOnTopic(message, detectedTopic)) {
     return res.json({
-      response: `I'm here to help you discover answers in mathematics! What specific math problem or concept would you like to explore? What are you curious about?`,
+      response: `I'm here to help you discover answers in Year 7 mathematics! What specific math problem or concept would you like to explore? What are you curious about?`,
       error: 'off_topic',
     });
   }
@@ -604,6 +986,23 @@ app.post('/api/chat', async (req, res) => {
     let messagesToSend = [...conversation.messages];
     let contextSummary = '';
 
+    // Check if we need curriculum context
+    const needsCurriculumContext = !conversation.curriculumLoaded || 
+                                   conversation.lastCurriculumTopic !== detectedTopic;
+
+    if (needsCurriculumContext) {
+      const curriculumContext = getCurriculumContext(detectedTopic);
+      if (curriculumContext) {
+        messagesToSend.unshift({
+          role: 'system',
+          content: `[${curriculumContext}]`
+        });
+        console.log(`📖 Added curriculum context: ${curriculumContext}`);
+      }
+      conversation.curriculumLoaded = true;
+      conversation.lastCurriculumTopic = detectedTopic;
+    }
+
     // If conversation is getting long, summarize older parts
     if (messagesToSend.length > 14) {
       const oldMessages = messagesToSend.slice(0, -10); // Keep last 10 messages
@@ -622,7 +1021,7 @@ app.post('/api/chat', async (req, res) => {
 
     // Clean messages for Claude (remove timestamps and system messages)
     const cleanMessages = messagesToSend
-      .filter(m => m.role !== 'system' || m.content.startsWith('Earlier in our conversation'))
+      .filter(m => m.role !== 'system' || m.content.startsWith('Earlier in our conversation') || m.content.startsWith('[Y7'))
       .map(m => ({
         role: m.role === 'system' ? 'user' : m.role,
         content: m.role === 'system' ? `[Context: ${m.content}]` : m.content
@@ -698,19 +1097,25 @@ app.post('/api/chat', async (req, res) => {
         limit: currentUsage.limit,
       },
       conversationId: conversationKey,
+      curriculum: {
+        topicInScope: scopeCheck.inScope,
+        detectedTopic: detectedTopic
+      },
       debug: {
         foundExistingConversations: userConversations.length,
         usedExistingConversation: !!mostRecentConversation,
         totalMessagesInConversation: conversation.messages.length,
         userId: userId,
-        originalConversationKey: conversationKey
+        originalConversationKey: conversationKey,
+        curriculumLoaded: conversation.curriculumLoaded,
+        curriculumTopic: conversation.lastCurriculumTopic
       }
     });
 
   } catch (error) {
     console.error('❌ Claude API Error:', error.message);
     res.json({
-      response: "Hmm, I'm having a technical hiccup right now. While I sort this out, can you tell me what you were thinking about that problem? What approach were you considering?",
+      response: "I'm having a technical hiccup right now. While I sort this out, can you tell me what you were thinking about that problem? What approach were you considering?",
       error: true,
       fallback: true,
     });
@@ -750,7 +1155,9 @@ app.get('/api/chat/status/:userId', (req, res) => {
       totalTokens: conv.totalTokens,
       createdAt: conv.createdAt,
       lastActive: conv.lastActive,
-      ageInMinutes: Math.round((Date.now() - conv.createdAt) / (1000 * 60))
+      ageInMinutes: Math.round((Date.now() - conv.createdAt) / (1000 * 60)),
+      curriculumLoaded: conv.curriculumLoaded,
+      lastCurriculumTopic: conv.lastCurriculumTopic
     }))
     .sort((a, b) => b.lastActive - a.lastActive);
 
@@ -792,10 +1199,17 @@ app.get('/debug', (req, res) => {
       docx: 'Enabled ✅',
       pdf: 'Enabled ✅ (pdfkit)',
       mathRendering: 'KaTeX ✅',
+      curriculumIntegration: 'Year 7 NSW ✅',
+      scopeValidation: 'Enabled ✅',
     },
     conversations: {
       active: conversations.size,
       ...conversationStats
+    },
+    curriculum: {
+      loaded: !!curriculum,
+      topics: curriculum?.topic_catalog?.length || 0,
+      version: curriculum?.meta?.version || 'unknown'
     }
   });
 });
@@ -821,6 +1235,7 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log('🤖 Claude 3.5 Haiku ready with enhanced Socratic method and context management!');
   console.log('✨ Features: Persistent conversations, smart summarization, progressive learning');
+  console.log(`📚 Year 7 NSW Curriculum loaded: ${curriculum?.topic_catalog?.length || 0} topics`);
 });
 
 module.exports = app;
