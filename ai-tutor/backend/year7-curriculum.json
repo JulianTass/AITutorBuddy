@@ -1,0 +1,379 @@
+{
+    "meta": {
+      "version": "1.4.0",
+      "audience": "Year 7 Maths (AU, NSW syllabus aligned)",
+      "sources": [
+        "New Century Maths 7 (chapter map, codes, proficiencies)",
+        "Year 7 maths glossary and symbols",
+        "NSW Mathematics K-10 Syllabus"
+      ],
+      "last_updated_iso": "2025-08-22"
+    },
+  
+    "system_rules": [
+      "You are a Year 7 maths tutor. Stay strictly within Year 7 scope.",
+      "Always show working and explain in short, numbered steps.",
+      "Prefer simple language and concrete examples.",
+      "If a question is above Year 7 level, briefly say so and redirect to a Year 7 prerequisite.",
+      "End with a quick self-check question the student can try."
+    ],
+  
+    "style_guidelines": {
+      "tone": "supportive, patient, encouraging",
+      "format": ["Goal", "Steps", "Answer", "Check-your-understanding", "Extension (optional)"],
+      "reading_level": "Year 7",
+      "example_length": "short"
+    },
+  
+    "safety": {
+      "disallowed_topics": [
+        "Non-maths content",
+        "Year 8+ topics unless simplifying to Year 7 foundations"
+      ],
+      "on_violation": "Sorry, that topic is beyond Year 7. Let's build the foundation first: <suggest Year 7 prerequisite>."
+    },
+  
+    "working_mathematically": [
+      "Understanding",
+      "Fluency",
+      "Problem Solving",
+      "Reasoning",
+      "Communicating"
+    ],
+  
+    "curriculum_alignment": {
+      "codes_to_topics": [
+        { "code": "ACMNA149", "topic": "Indices: prime factorisation, index notation" },
+        { "code": "ACMNA150", "topic": "Square roots (perfect squares)" },
+        { "code": "ACMNA151", "topic": "Laws of arithmetic (associative, commutative, distributive)" },
+        { "code": "ACMNA280", "topic": "Integers: compare, order, add, subtract" },
+        { "code": "ACMNA152", "topic": "Fractions: compare, number line" },
+        { "code": "ACMNA153", "topic": "Add/subtract fractions (unrelated denominators)" },
+        { "code": "ACMNA154", "topic": "Multiply/divide fractions and decimals" },
+        { "code": "ACMNA155", "topic": "Express one quantity as a fraction of another" },
+        { "code": "ACMNA156", "topic": "Round decimals" },
+        { "code": "ACMNA157", "topic": "Connect fractions, decimals, percentages" },
+        { "code": "ACMNA158", "topic": "Find percentages of quantities, express as %" },
+        { "code": "ACMNA173", "topic": "Ratios (recognise, solve)" },
+        { "code": "ACMNA174", "topic": "Best buys" },
+        { "code": "ACMNA175", "topic": "Variables" },
+        { "code": "ACMNA176", "topic": "Create expressions; substitution" },
+        { "code": "ACMNA177", "topic": "Extend laws of arithmetic to algebraic terms" },
+        { "code": "ACMNA178", "topic": "Plot points; Cartesian plane" },
+        { "code": "ACMNA179", "topic": "Solve simple linear equations" },
+        { "code": "ACMNA180", "topic": "Interpret and analyse graphs from data" },
+        { "code": "ACMMG159", "topic": "Area: rectangles, triangles, parallelograms, trapeziums" },
+        { "code": "ACMMG160", "topic": "Volume: rectangular prisms" },
+        { "code": "ACMMG181", "topic": "Transformations and symmetry on the plane" },
+        { "code": "ACMMG163", "topic": "Angles with a transversal (corr/alt/co-interior)" },
+        { "code": "ACMMG164", "topic": "Conditions for parallel lines" },
+        { "code": "ACMMG165", "topic": "Classify triangles; describe quadrilaterals" },
+        { "code": "ACMMG166", "topic": "Angle sum of triangle/quadrilateral" },
+        { "code": "ACMSP167", "topic": "Sample spaces (single-step)" },
+        { "code": "ACMSP168", "topic": "Assign probabilities; determine event probabilities" },
+        { "code": "ACMSP169", "topic": "Investigate numerical data issues" },
+        { "code": "ACMSP170", "topic": "Construct/compare data displays incl. dot/stem-leaf" },
+        { "code": "ACMSP171", "topic": "Mean/median/mode/range; interpret" },
+        { "code": "ACMSP172", "topic": "Describe & interpret displays using central tendency" }
+      ],
+      "chapters": [
+        "Integers",
+        "Angles",
+        "Whole numbers",
+        "Fractions and percentages",
+        "Algebra and equations",
+        "Geometry",
+        "Decimals",
+        "Area and volume",
+        "The number plane",
+        "Analysing data",
+        "Probability",
+        "Ratios, rates and time"
+      ]
+    },
+  
+    "topic_catalog": [
+      {
+        "topic": "Integers",
+        "subtopics": ["Order on number line", "Add/subtract", "Multiply/divide", "Order of operations", "Absolute value", "Negative numbers"],
+        "allowed_verbs": ["order", "add", "subtract", "multiply", "divide", "evaluate", "estimate", "compare"],
+        "key_symbols": ["+", "-", "×", "÷", "| | (absolute value)", "<", ">"],
+        "diagnostic_prereqs": ["Place value with whole numbers"]
+      },
+      {
+        "topic": "Angles & Parallel Lines",
+        "subtopics": ["Name/measure angles", "Complementary/supplementary", "Angles around a point", "Vertically opposite", "Corresponding/alternate/co-interior", "Proving parallel lines", "Angle relationships"],
+        "allowed_verbs": ["measure", "classify", "construct", "prove", "identify", "calculate", "find"],
+        "key_symbols": ["∠", "∥", "⊥", "°"],
+        "diagnostic_prereqs": ["Use of protractor", "Angle terminology"]
+      },
+      {
+        "topic": "Fractions & Percentages",
+        "subtopics": ["Compare/order", "Add/subtract (unrelated denoms)", "Multiply/divide", "Fraction of a quantity", "Decimals ↔ Fractions ↔ Percentages", "Percentage of a quantity", "Mixed numbers", "Improper fractions"],
+        "allowed_verbs": ["simplify", "convert", "add", "subtract", "multiply", "divide", "express as", "round", "compare", "order"],
+        "key_symbols": ["½", "%", "÷", "×", "¼", "¾"],
+        "diagnostic_prereqs": ["Factors & multiples", "Common denominators"]
+      },
+      {
+        "topic": "Algebra & Equations",
+        "subtopics": ["Variables & expressions", "Laws of arithmetic", "Distributive law", "Substitution", "One-step & two-step equations", "Coefficients", "Like terms", "Simplifying expressions"],
+        "allowed_verbs": ["substitute", "simplify", "solve", "evaluate", "expand", "collect"],
+        "key_symbols": ["=", "≠", "(", ")", "[", "]", "{", "}", "x", "y", "a", "b"],
+        "diagnostic_prereqs": ["Order of operations", "Arithmetic fluency"]
+      },
+      {
+        "topic": "Decimals",
+        "subtopics": ["Ordering", "Add/subtract", "×/÷ by powers of 10", "Multiply/divide decimals", "Terminating vs recurring", "Rounding", "Place value"],
+        "allowed_verbs": ["round", "add", "subtract", "multiply", "divide", "estimate", "convert", "order", "compare"],
+        "key_symbols": [".", "→ (round to)", "≈"],
+        "diagnostic_prereqs": ["Place value with decimals"]
+      },
+      {
+        "topic": "Area & Volume",
+        "subtopics": ["Metric units", "Perimeter", "Area (rectangles)", "Area (triangles)", "Area (parallelograms)", "Area (trapeziums)", "Composite areas", "Volume of prisms", "Surface area", "Capacity"],
+        "allowed_verbs": ["measure", "calculate", "convert", "construct", "sketch", "find", "determine", "work out"],
+        "key_symbols": ["cm²", "m²", "cm³", "m³", "L", "h", "b", "A"],
+        "diagnostic_prereqs": ["Multiplication facts", "Unit conversions"]
+      },
+      {
+        "topic": "Geometry",
+        "subtopics": ["Quadrilaterals", "Triangles", "Properties of shapes", "Symmetry", "Transformations", "Congruence", "Construction", "Scale drawings"],
+        "allowed_verbs": ["classify", "describe", "construct", "identify", "transform", "reflect", "rotate", "translate"],
+        "key_symbols": ["≅", "∠", "△", "□"],
+        "diagnostic_prereqs": ["Basic shape recognition", "Angle measurement"]
+      },
+      {
+        "topic": "Number Plane",
+        "subtopics": ["Coordinates", "Plotting", "Tables of values", "Transformations on plane", "Cartesian plane", "Quadrants"],
+        "allowed_verbs": ["plot", "graph", "translate", "reflect", "rotate", "identify", "locate"],
+        "key_symbols": ["(x, y)", "x-axis", "y-axis", "O (origin)"],
+        "diagnostic_prereqs": ["Positive/negative numbers"]
+      },
+      {
+        "topic": "Analysing Data",
+        "subtopics": ["Interpret graphs", "Dot plots", "Stem-and-leaf", "Mean/median/mode/range", "Compare data sets", "Column graphs", "Line graphs", "Pie charts"],
+        "allowed_verbs": ["interpret", "construct", "compare", "calculate", "describe", "analyse", "read"],
+        "key_symbols": ["x̄ (mean)", "∼ (approx)", "→", "%"],
+        "diagnostic_prereqs": ["Reading scales", "Ordering numbers"]
+      },
+      {
+        "topic": "Probability",
+        "subtopics": ["Sample spaces", "Event probability", "Complementary events", "Experimental probability", "Theoretical probability", "Outcomes", "Favourable outcomes"],
+        "allowed_verbs": ["list", "assign", "calculate", "estimate", "simulate", "predict", "determine"],
+        "key_symbols": ["P(E)", "∴", "∪", "∩"],
+        "diagnostic_prereqs": ["Fractions & percentages"]
+      },
+      {
+        "topic": "Ratios, Rates & Time",
+        "subtopics": ["Form & simplify ratios", "Best buys", "Rates & unit rates", "Travel graphs", "12/24-hour time", "Timetables", "Speed", "Distance", "Time calculations"],
+        "allowed_verbs": ["simplify", "compare", "convert", "interpret", "calculate", "find", "determine"],
+        "key_symbols": [":", "km/h", "a.m./p.m.", "24-hour time", "m/s"],
+        "diagnostic_prereqs": ["Fractions to decimals", "Unit conversions"]
+      }
+    ],
+  
+    "glossary": {
+      "verbs": [
+        { "term": "bisect", "meaning": "cut exactly in half" },
+        { "term": "calculate", "meaning": "work out the value of an expression" },
+        { "term": "classify", "meaning": "sort by shared properties" },
+        { "term": "construct", "meaning": "draw accurately (e.g., with ruler/protractor/compasses)" },
+        { "term": "convert", "meaning": "change form (e.g., fraction → decimal)" },
+        { "term": "estimate", "meaning": "approximate a value reasonably" },
+        { "term": "evaluate", "meaning": "substitute and compute" },
+        { "term": "graph", "meaning": "display on a number line/plane or statistical graph" },
+        { "term": "round", "meaning": "state to nearest place (e.g., whole, tenth, cent)" },
+        { "term": "simplify", "meaning": "reduce to simplest equivalent form" },
+        { "term": "solve", "meaning": "find the unknown that makes an equation true" },
+        { "term": "substitute", "meaning": "replace a variable with a number then compute" }
+      ],
+      "math_terms": [
+        { "term": "coefficient", "meaning": "the number in front of the pronumeral/variable" },
+        { "term": "variable", "meaning": "a letter that represents an unknown number" },
+        { "term": "constant", "meaning": "a number that doesn't change in an expression" },
+        { "term": "term", "meaning": "a single part of an expression, separated by + or -" },
+        { "term": "expression", "meaning": "a mathematical phrase with numbers, variables and operations" },
+        { "term": "equation", "meaning": "a mathematical statement showing two expressions are equal" },
+        { "term": "trapezium", "meaning": "a quadrilateral with one pair of parallel sides" },
+        { "term": "parallelogram", "meaning": "a quadrilateral with two pairs of parallel sides" },
+        { "term": "quadrilateral", "meaning": "a four-sided polygon" },
+        { "term": "perpendicular", "meaning": "at right angles (90 degrees)" },
+        { "term": "parallel", "meaning": "lines that never meet, always the same distance apart" },
+        { "term": "height", "meaning": "the perpendicular distance between parallel sides" },
+        { "term": "base", "meaning": "the bottom side of a shape, or a side used as reference" },
+        { "term": "perimeter", "meaning": "the distance around the outside of a shape" },
+        { "term": "area", "meaning": "the amount of space inside a 2D shape" },
+        { "term": "volume", "meaning": "the amount of space inside a 3D shape" },
+        { "term": "factor", "meaning": "a number that divides exactly into another number" },
+        { "term": "multiple", "meaning": "the result of multiplying a number by a whole number" },
+        { "term": "prime", "meaning": "a number with exactly two factors: 1 and itself" },
+        { "term": "composite", "meaning": "a number with more than two factors" },
+        { "term": "ratio", "meaning": "a comparison of two or more quantities" },
+        { "term": "rate", "meaning": "a ratio that compares different types of quantities" },
+        { "term": "percentage", "meaning": "a fraction out of 100" },
+        { "term": "probability", "meaning": "the chance of an event happening" },
+        { "term": "mean", "meaning": "the average of a set of numbers" },
+        { "term": "median", "meaning": "the middle value when numbers are arranged in order" },
+        { "term": "mode", "meaning": "the most frequently occurring value" },
+        { "term": "range", "meaning": "the difference between the largest and smallest values" }
+      ],
+      "symbols_common": [
+        { "name": "plus", "symbol": "+" },
+        { "name": "minus", "symbol": "-" },
+        { "name": "times", "symbol": "×" },
+        { "name": "divide", "symbol": "÷" },
+        { "name": "equals", "symbol": "=" },
+        { "name": "not equals", "symbol": "≠" },
+        { "name": "less than", "symbol": "<" },
+        { "name": "greater than", "symbol": ">" },
+        { "name": "less than or equal", "symbol": "≤" },
+        { "name": "greater than or equal", "symbol": "≥" },
+        { "name": "square root", "symbol": "√" },
+        { "name": "cube root", "symbol": "∛" },
+        { "name": "angle", "symbol": "∠" },
+        { "name": "parallel", "symbol": "∥" },
+        { "name": "perpendicular", "symbol": "⊥" },
+        { "name": "probability of event", "symbol": "P(E)" },
+        { "name": "therefore", "symbol": "∴" },
+        { "name": "approximately", "symbol": "≈" },
+        { "name": "degree", "symbol": "°" }
+      ]
+    },
+  
+    "scaffolds": {
+      "two_step_equations": [
+        "Undo addition/subtraction first.",
+        "Then undo multiplication/division."
+      ],
+      "fractions_add_sub": [
+        "Find a common denominator.",
+        "Rewrite equivalent fractions.",
+        "Add/subtract numerators; keep denominator.",
+        "Simplify or convert to mixed number."
+      ],
+      "percent_of_quantity": [
+        "Convert % to decimal or fraction.",
+        "Multiply by the quantity.",
+        "Round to required accuracy."
+      ],
+      "angles_with_parallel_lines": [
+        "Mark corresponding/alternate/co-interior pairs.",
+        "Use known equal/sum rules to find unknowns."
+      ],
+      "area_rectangle": [
+        "Identify length and width.",
+        "Multiply: Area = length × width.",
+        "Include correct units (cm², m², etc.)."
+      ],
+      "area_triangle": [
+        "Identify base and height.",
+        "Use formula: Area = ½ × base × height.",
+        "Include correct units."
+      ],
+      "area_parallelogram": [
+        "Identify base and perpendicular height.",
+        "Use formula: Area = base × height.",
+        "Include correct units."
+      ],
+      "area_trapezium": [
+        "Identify the two parallel sides (bases).",
+        "Identify the perpendicular height.",
+        "Use formula: Area = ½ × (sum of parallel sides) × height.",
+        "Include correct units."
+      ],
+      "solving_proportions": [
+        "Set up the proportion as two equal ratios.",
+        "Cross multiply.",
+        "Solve the resulting equation.",
+        "Check your answer makes sense."
+      ],
+     "fractions_to_decimals": [
+        "Method 1: Try to make denominator 10, 100, or 1000.",
+        "If impossible, use Method 2: Long division with decimal places.",
+        "Step 1: Set up division bracket: 3)1.000000 with decimal point in quotient above decimal in dividend.",
+        "Step 2: Since 3 > 1, add a zero: 3)1.0 becomes 3)10. Divide: 10 ÷ 3 = 3 remainder 1. Write 0.3 above.",
+        "Step 3: Bring down next zero to make 10 again. Divide: 10 ÷ 3 = 3 remainder 1. Write 0.33 above.",
+        "Step 4: Continue pattern. Bring down next zero to make 10. Divide: 10 ÷ 3 = 3 remainder 1. Write 0.333 above.",
+        "Step 5: Notice the pattern: remainder is always 1, quotient digit is always 3.",
+        "Step 6: Conclude: 1/3 = 0.333... = 0.3̄ (3 repeats forever)."
+        ]
+      
+    },
+  
+    "common_misconceptions": [
+      { "topic": "Fractions", "pattern": "Add denominators", "fix": "Denominator stays the same after finding a common denominator; only numerators add." },
+      { "topic": "Decimals", "pattern": "Misaligned decimal points", "fix": "Line up decimal points before adding/subtracting." },
+      { "topic": "Algebra", "pattern": "Treat '=' as 'do something'", "fix": "Equation means both sides are equal; perform the same operation to both sides." },
+      { "topic": "Angles", "pattern": "Confuse alt/corr angles", "fix": "Use 'F' (corresponding) and 'Z' (alternate) visual cues." },
+      { "topic": "Area", "pattern": "Confuse perimeter and area", "fix": "Perimeter is around the outside, area is space inside." },
+      { "topic": "Percentage", "pattern": "Add % directly to number", "fix": "Convert percentage to decimal first, then multiply." },
+      { "topic": "Negative numbers", "pattern": "Ignore negative signs", "fix": "Use number line to visualise negative number operations." }
+    ],
+  
+    "few_shot_examples": [
+      {
+        "id": "eq-2x-plus-5",
+        "topic": "Algebra & Equations",
+        "user": "Solve 2x + 5 = 15",
+        "assistant": "Goal: Find x.\n1) Subtract 5: 2x = 10\n2) Divide by 2: x = 5\nCheck: 2×5+5=15 ✓"
+      },
+      {
+        "id": "frac-1-2-plus-3-4",
+        "topic": "Fractions & Percentages",
+        "user": "Add 1/2 + 3/4",
+        "assistant": "1) Common denominator: 1/2 = 2/4\n2) 2/4 + 3/4 = 5/4 = 1 1/4"
+      },
+      {
+        "id": "area-trapezium",
+        "topic": "Area & Volume",
+        "user": "Find area of trapezium with parallel sides 8cm and 12cm, height 5cm",
+        "assistant": "1) Identify: parallel sides = 8cm, 12cm; height = 5cm\n2) Formula: A = ½ × (sum of parallel sides) × height\n3) A = ½ × (8 + 12) × 5 = ½ × 20 × 5 = 50 cm²"
+      },
+      {
+        "id": "frac-1-3-to-decimal-visual",
+        "topic": "Fractions & Percentages",
+        "user": "Convert 1/3 to decimal",
+        "assistant": "Let's convert 1/3 to a decimal using long division! First, can you try making the denominator 3 into 10, 100, or 1000? What happens when you try to multiply 3 by different numbers?"
+      }
+    ],
+  
+    "diagnostics": {
+      "classifier_labels": [
+        "integers",
+        "angles",
+        "whole_numbers",
+        "fractions",
+        "algebra",
+        "geometry",
+        "decimals",
+        "area_volume",
+        "number_plane",
+        "data",
+        "probability",
+        "ratios_rates_time",
+        "out_of_scope"
+      ],
+      "out_of_scope_policy": "Refuse and route to closest Year 7 prerequisite topic."
+    },
+  
+    "refusal_messages": [
+      "That topic is beyond Year 7. Let's first practise <prerequisite> so the harder idea makes sense.",
+      "We're focusing on Year 7 maths. Want to try a related Year 7 skill: <suggestion>?"
+    ],
+  
+    "rubric": {
+      "step_structure": "Present steps explicitly and in order",
+      "working_shown": "Show intermediate operations",
+      "vocab_use": "Use correct Year 7 terminology",
+      "scope_check": "No Yr8+ procedures unless simplified",
+      "closing_check": "Include a quick self-check question"
+    },
+  
+    "orchestration": {
+      "system_prompt_keys": ["system_rules", "style_guidelines"],
+      "dynamic_context_keys": ["scaffolds", "few_shot_examples"],
+      "retrieval_tags": ["topic", "subtopic", "grade_band:Year7"],
+      "max_examples": 2,
+      "temperature": 0.3
+    }
+  }
