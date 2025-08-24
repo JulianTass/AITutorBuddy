@@ -16,7 +16,7 @@ const katex = require('katex');
 // Load Year 7 curriculum
 const curriculum = require('./year7-curriculum.json');
 
-// For DOCX and PDF output
+// For DOCX and PDF outputpost 
 const {
   Document,
   Packer,
@@ -36,6 +36,31 @@ const conversations = new Map();
 const curriculumCache = new Map();
 const conversationTranscripts = new Map(); 
 const TRANSCRIPT_RETENTION_DAYS = 30;
+
+// --- Curriculum topic resolver (supports either topic_catalog[] or topics{}) ---
+function resolveTopicData(topicText = '') {
+  const q = String(topicText).toLowerCase();
+
+  // If an array topic_catalog exists, prefer it
+  if (Array.isArray(curriculum.topic_catalog)) {
+    return curriculum.topic_catalog.find(t =>
+      (t.topic && t.topic.toLowerCase().includes(q)) ||
+      (Array.isArray(t.subtopics) && t.subtopics.some(s => s.toLowerCase().includes(q)))
+    ) || null;
+  }
+
+  // Otherwise use topics{} (your current JSON shape)
+  if (curriculum.topics && typeof curriculum.topics === 'object') {
+    const entries = Object.entries(curriculum.topics).map(([id, t]) => ({ id, ...t }));
+    return entries.find(t =>
+      (t.displayName && t.displayName.toLowerCase().includes(q)) ||
+      (Array.isArray(t.subtopics) && t.subtopics.some(s => s.toLowerCase().includes(q)))
+    ) || null;
+  }
+
+  return null;
+}
+
 
 // === Anthropic (Claude) init ===
 let anthropic = null;
@@ -57,30 +82,30 @@ app.use(express.json());
 
 // --- Curriculum Integration Functions ---
 function buildYear7SystemPrompt(topic) {
-  // Find topic-specific data
-  const topicData = curriculum.topic_catalog.find(t => 
-    t.topic.toLowerCase().includes(topic.toLowerCase()) ||
-    t.subtopics.some(sub => topic.toLowerCase().includes(sub.toLowerCase()))
-  );
-  
-  // Build core rules
-  const coreRules = curriculum.system_rules.join(' ');
-  const styleGuide = curriculum.style_guidelines.tone + ', ' + curriculum.style_guidelines.format.join(' then ');
-  
+  const topicData = resolveTopicData(topic); // ✅ use resolver
+
+  const coreRules = Array.isArray(curriculum.system_rules)
+    ? curriculum.system_rules.join(' ')
+    : 'You are a Year 7 maths tutor.';
+
+  const styleGuide = curriculum.style_guidelines
+    ? `${curriculum.style_guidelines.tone || 'supportive'}, ${(curriculum.style_guidelines.format || []).join(' then ')}`
+    : 'supportive, Goal then Steps then Answer then Check-your-understanding';
+
   let topicContext = '';
   let scaffoldInstructions = '';
-  
+
   if (topicData) {
-    topicContext = '\nTOPIC: ' + topicData.topic;
-    topicContext += '\nSCOPE: ' + topicData.subtopics.slice(0, 4).join(', ');
-    topicContext += '\nALLOWED: ' + topicData.allowed_verbs.join(', ');
-    
-    // Enhanced scaffold matching - more specific and comprehensive
-    const relevantScaffolds = findRelevantScaffolds(topicData, topic);
-    
+    const topicName = topicData.topic || topicData.displayName || 'Topic';
+    const subs = Array.isArray(topicData.subtopics) ? topicData.subtopics.slice(0, 4).join(', ') : '';
+
+    topicContext += `\nTOPIC: ${topicName}`;
+    if (subs) topicContext += `\nSCOPE: ${subs}`;
+
+    // Add scaffold instructions if relevant
+    const relevantScaffolds = findRelevantScaffolds(topicData, topic || topicName) || [];
     if (relevantScaffolds.length > 0) {
       scaffoldInstructions = '\n\nCRITICAL SCAFFOLD STEPS - YOU MUST GUIDE STUDENTS THROUGH THESE EXACT STEPS:';
-      
       relevantScaffolds.forEach(({ key, steps, priority }) => {
         scaffoldInstructions += `\n\nFor ${key.replace(/_/g, ' ')} problems (Priority: ${priority}):`;
         steps.forEach((step, index) => {
@@ -90,35 +115,88 @@ function buildYear7SystemPrompt(topic) {
         scaffoldInstructions += '\n  → Do NOT skip steps or give direct answers';
         scaffoldInstructions += '\n  → Wait for student response before proceeding to next step';
       });
-      
-      scaffoldInstructions += '\n\nWhen you recognize a problem that matches these scaffolds:';
-      scaffoldInstructions += '\n1. Identify which scaffold applies';
-      scaffoldInstructions += '\n2. Ask a question that leads to Step 1';
-      scaffoldInstructions += '\n3. Only proceed to the next step after student engagement';
-      scaffoldInstructions += '\n4. Use the scaffold steps as your roadmap for questioning';
+      scaffoldInstructions += '\n\nWhen you recognize a problem that matches these scaffolds:\n1. Identify which scaffold applies\n2. Ask a question that leads to Step 1\n3. Only proceed to the next step after student engagement\n4. Use the scaffold steps as your roadmap for questioning';
     }
-    
+
     // Add misconception warning
-    const misconception = curriculum.common_misconceptions.find(m => 
-      topicData.topic.includes(m.topic)
-    );
-    if (misconception) {
-      topicContext += '\nWATCH: ' + misconception.pattern + ' - fix: ' + misconception.fix;
+    const mismatch = Array.isArray(curriculum.common_misconceptions)
+      ? curriculum.common_misconceptions.find(m =>
+          String(topicName).toLowerCase().includes(String(m.topic || '').toLowerCase())
+        )
+      : null;
+    if (mismatch) {
+      topicContext += `\nWATCH: ${mismatch.pattern} - fix: ${mismatch.fix}`;
     }
   }
-  
-  const fullPrompt = 'You are StudyBuddy, NSW Year 7 mathematics tutor.\n\n' +
+
+  const fullPrompt =
+    'You are StudyBuddy, NSW Year 7 mathematics tutor.\n\n' +
     'CORE RULES: ' + coreRules + '\n' +
-    'STYLE: ' + styleGuide + 
-    topicContext + 
+    'STYLE: ' + styleGuide +
+    topicContext +
     scaffoldInstructions + '\n\n' +
     'CRITICAL: Use Socratic method ONLY - ask guiding questions, NEVER give direct answers or final results.\n' +
     'Never use emojis. Ask ONE question at a time. Guide discovery step by step.\n' +
     'When teaching procedures, ask questions that lead students through the exact scaffold steps.\n' +
-    'ALWAYS follow the scaffold steps when they apply to the student\'s question.';
-  
+    "ALWAYS follow the scaffold steps when they apply to the student's question.";
+
   return fullPrompt;
 }
+
+
+function buildTopicSpecificPrompt(selectedTopics) {
+  if (!Array.isArray(selectedTopics) || selectedTopics.length === 0) {
+    console.log('⚠️ No selected topics provided');
+    return '';
+  }
+
+  console.log('🎯 Processing selected topics:', selectedTopics);
+
+  const topicInstructions = selectedTopics.map(topicId => {
+    // Try direct lookup first
+    let topic = curriculum.topics[topicId];
+    
+    // If not found, try with underscores instead of hyphens
+    if (!topic) {
+      const underscoredId = topicId.replace(/-/g, '_');
+      topic = curriculum.topics[underscoredId];
+      console.log(`🔄 Tried underscore version: ${underscoredId} -> ${!!topic}`);
+    }
+    
+    // If still not found, try to find by displayName match (fuzzy)
+    if (!topic) {
+      const topicEntries = Object.entries(curriculum.topics);
+      const found = topicEntries.find(([key, topicData]) => {
+        if (!topicData.displayName) return false;
+        const displayName = topicData.displayName.toLowerCase();
+        const searchId = topicId.toLowerCase();
+        return displayName.includes(searchId) || searchId.includes(displayName.split(' ')[0]);
+      });
+      
+      if (found) {
+        topic = found[1];
+        console.log(`🎯 Found by display name: ${topicId} -> ${topic.displayName}`);
+      }
+    }
+    
+    if (!topic) {
+      console.log(`❌ Topic not found: ${topicId}`);
+      return '';
+    }
+    
+    console.log(`✅ Found topic: ${topicId} -> ${topic.displayName}`);
+    
+    return `TOPIC: ${topic.displayName}
+FOCUS: ${topic.instructions}
+METHODS: ${topic.methods ? topic.methods.join(', ') : 'N/A'}
+START WITH: ${topic.proficiency?.easy?.examples?.[0] || 'Basic concepts'}
+VOCABULARY: ${topic.glossary ? topic.glossary.join(', ') : 'N/A'}`;
+  }).filter(Boolean).join('\n\n');
+  
+  console.log('📝 Generated topic instructions:', topicInstructions ? 'Success' : 'Empty');
+  return topicInstructions;
+}
+
 
 function createTranscriptEntry(userId, message, response, metadata = {}) {
   return {
@@ -367,83 +445,104 @@ function getYear7Definition(term) {
 }
 
 function getCurriculumContext(topic) {
-  if (curriculumCache.has(topic)) {
-    return curriculumCache.get(topic);
-  }
-  
-  const topicData = curriculum.topic_catalog.find(t => 
-    t.topic.toLowerCase().includes(topic.toLowerCase())
-  );
-  
-  if (!topicData) {
-    curriculumCache.set(topic, '');
+  try {
+    const key = String(topic || '').trim().toLowerCase();
+    if (!key) return '';
+
+    if (curriculumCache.has(key)) {
+      return curriculumCache.get(key);
+    }
+
+    const t = resolveTopicData(key); // ✅ use resolver
+    if (!t) {
+      curriculumCache.set(key, '');
+      return '';
+    }
+
+    const name = t.topic || t.displayName || 'Topic';
+    const subs = Array.isArray(t.subtopics) ? t.subtopics.slice(0, 3).join(', ') : '';
+    const instructions = (t.instructions || '').trim();
+    const starter =
+      t.proficiency?.easy?.examples?.[0] ||
+      t.proficiency?.easy?.concepts?.[0] ||
+      '';
+
+    let context = `Y7 ${name}`;
+    if (subs) context += ` — focus: ${subs}`;
+    if (instructions) context += `\nGuidance: ${instructions}`;
+    if (starter) context += `\nStart with: ${starter}`;
+
+    curriculumCache.set(key, context);
+    return context;
+  } catch (e) {
+    console.error('getCurriculumContext error:', e);
     return '';
   }
-  
-  const context = `Y7 ${topicData.topic}: ${topicData.subtopics.slice(0, 3).join(', ')}`;
-  curriculumCache.set(topic, context);
-  return context;
 }
 
+
 // --- Enhanced Topic Detection with Curriculum ---
-function detectMathematicalTopicWithCurriculum(message, existingConversation = null) {
-  const msg = (message || '').toLowerCase();
-  
-  // If we have an existing conversation and this looks like a follow-up,
-  // keep the same topic to maintain context
-  if (existingConversation && existingConversation.subject !== 'Mathematics') {
-    const followUpIndicators = [
-      /^\d+$/, // Just a number
-      /^(yes|no|ok|right|correct|wrong)$/,
-      /^(we|do|can|should|will|then|next|now|it|this|that)/,
-      /^[+\-*/=().\d\s]+$/,
-      // Add more follow-up patterns for definitions/explanations
-      /^(not sure|don't know|confused|help|what|how)/,
-      /^(i think|maybe|perhaps|could it be)/
-    ];
-    
-    const isFollowUp = followUpIndicators.some(pattern => pattern.test(msg.trim())) || msg.length < 20;
-    
-    if (isFollowUp) {
-      console.log(`🔗 Detected follow-up question, maintaining topic: ${existingConversation.subject}`);
-      return existingConversation.subject;
+// Detects a likely topic name from a free-form message using curriculum keywords.
+// Works with either curriculum.topic_catalog[] or curriculum.topics{}.
+// Returns a displayable topic string or a sensible default (e.g., 'Mathematics').
+function detectMathematicalTopicWithCurriculum(messageText = '', fallback = 'Mathematics') {
+  try {
+    const msg = String(messageText).toLowerCase().trim();
+    if (!msg) return fallback;
+
+    // Build a unified list of topic entries
+    const topicsArray = Array.isArray(curriculum.topic_catalog)
+      ? curriculum.topic_catalog
+      : (curriculum.topics ? Object.values(curriculum.topics) : []);
+
+    // Nothing to scan
+    if (!Array.isArray(topicsArray) || topicsArray.length === 0) {
+      return fallback;
     }
-  }
-  
-  // First check against curriculum topics
-  for (const topicData of curriculum.topic_catalog) {
-    const topicKeywords = [
-      ...topicData.subtopics.map(s => s.toLowerCase()),
-      ...topicData.allowed_verbs.map(v => v.toLowerCase()),
-      topicData.topic.toLowerCase()
-    ];
-    
-    if (topicKeywords.some(keyword => msg.includes(keyword))) {
-      console.log(`📖 Curriculum match: ${topicData.topic}`);
-      return topicData.topic;
+
+    // Prepare a list of candidates with keywords
+    const candidates = topicsArray.map(t => {
+      const name = (t.topic || t.displayName || '').trim();
+      const subtopics = Array.isArray(t.subtopics) ? t.subtopics : [];
+      // Build a keyword set: topic name + subtopics + a few method hints
+      const methods = Array.isArray(t.methods) ? t.methods : [];
+      const keywords = [
+        name.toLowerCase(),
+        ...subtopics.map(s => String(s).toLowerCase()),
+        ...methods.map(m => String(m).toLowerCase())
+      ].filter(Boolean);
+
+      return { name, keywords, raw: t };
+    });
+
+    // Scoring: count how many keywords appear in the message (simple heuristic)
+    let best = { score: 0, name: null, raw: null };
+    for (const c of candidates) {
+      if (!c.name) continue;
+      const score = c.keywords.reduce((acc, kw) => acc + (kw && msg.includes(kw) ? 1 : 0), 0);
+      if (score > best.score) best = { score, name: c.name, raw: c.raw };
     }
+
+    if (best.score > 0 && best.name) {
+      return best.name;
+    }
+
+    // Fallback: try a quick resolve on obvious words the user typed
+    // (e.g., "fractions", "integers", "angles")
+    // This uses your resolveTopicData helper and returns a displayable name if found.
+    const quickWords = msg.split(/[^a-z0-9_]+/i).filter(Boolean);
+    for (const w of quickWords) {
+      const t = resolveTopicData(w);
+      if (t) return t.topic || t.displayName || fallback;
+    }
+
+    return fallback;
+  } catch (e) {
+    console.error('detectMathematicalTopicWithCurriculum error:', e);
+    return fallback;
   }
-  
-  // Fallback to original detection
-  const topicPatterns = {
-    'Algebra & Equations': ['equation', 'solve', 'x', 'y', 'variable', 'algebra', '=', 'unknown', 'coefficient', 'term', 'constant'],
-    'Geometry': ['angle', 'triangle', 'area', 'perimeter', 'shape', 'circle', 'rectangle'],
-    'Fractions & Percentages': ['fraction', 'decimal', 'percentage', '/', 'percent', 'ratio'],
-    'Number Operations': ['add', 'subtract', 'multiply', 'divide', 'division', 'multiplication', 'times', 'plus', 'minus'],
-    'Indices': ['power', 'exponent', 'square', 'cube', '^', 'index', 'indices'],
-    'Analysing Data': ['data', 'graph', 'mean', 'median', 'average', 'mode', 'range'],
-    'Number Theory': ['prime', 'factor', 'multiple', 'divisible', 'remainder'],
-  };
-  
-  let bestTopic = 'Mathematics';
-  let bestScore = 0;
-  for (const [topic, keywords] of Object.entries(topicPatterns)) {
-    const score = keywords.filter(k => msg.includes(k)).length;
-    if (score > bestScore) { bestScore = score; bestTopic = topic; }
-  }
-  
-  return bestTopic;
 }
+
 
 // --- Helpers ---
 function estimateTokens(text) {
@@ -562,11 +661,15 @@ async function getWorksheetLatexFromClaude({ topic, difficulty, questionCount, y
     '- No answers, just questions\n' +
     '- Use proper LaTeX: \\frac{a}{b}, \\sqrt{x}, x^2, \\cdot for multiplication';
 
-  const ai = await anthropic.messages.create({
-    model: 'claude-3-5-haiku-20241022',
-    max_tokens: 1500,
-    messages: [{ role: 'user', content: prompt }],
-  });
+    const ai = await anthropic.messages.create({
+      model: 'claude-3-5-haiku-20241022',
+      max_tokens: 800,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: contextualMessage }]
+    });
+    
+    // Log actual API usage (if available in response)
+    console.log('Actual Claude API usage:', ai.usage);
 
   return (ai.content?.[0]?.text || '').trim();
 }
@@ -821,329 +924,155 @@ app.get('/api/user/:userId/tokens', (req, res) => {
   });
 });
 
-// IMPROVED CHAT WITH CURRICULUM INTEGRATION
 // IMPROVED CHAT WITH CURRICULUM INTEGRATION + TRANSCRIPT SAVE
+// IMPROVED CHAT WITH CURRICULUM INTEGRATION + TRANSCRIPT SAVE + TOKEN TRACKING
 app.post('/api/chat', async (req, res) => {
-  console.log('\n🚀 === CHAT REQUEST ===');
+  try {
+    console.log('\n🚀 === CHAT REQUEST ===');
 
-  const { 
-    message, 
-    subject = 'Mathematics', 
-    yearLevel = 7, 
-    curriculum = 'NSW', 
-    userId = 'anonymous',
-    resetContext = false,
-    // Ignored by server-side context mgmt
-    conversationHistory, // eslint-disable-line no-unused-vars
-    messageType,         // eslint-disable-line no-unused-vars
-    diagramContext = false // (optional) if you send this from the client
-  } = req.body || {};
+    const {
+      message,
+      subject = 'Mathematics',
+      yearLevel = 7,
+      curriculum: curriculumLabel = 'NSW',
+      userId = 'anonymous',
+      resetContext = false,
+      selectedTopics = [],        
+      diagramContext = false
+    } = req.body || {};
 
-  console.log(`📨 Message: "${message}" from user: ${userId}`);
+    if (!message || !String(message).trim()) {
+      return res.status(400).json({ error: true, message: 'Message is required' });
+    }
 
-  // Pull the most recent conversation for this user (any subject), newest first
-  const userConversations = Array.from(conversations.entries())
-    .filter(([key]) => key.startsWith(userId))
-    .sort(([,a], [,b]) => b.lastActive - a.lastActive);
+    // Initialize or get user token usage
+    if (!userTokenUsage.has(userId)) {
+      userTokenUsage.set(userId, { used: 0, limit: 5000 });
+    }
+    const tokenData = userTokenUsage.get(userId);
 
-  console.log(`👤 Found ${userConversations.length} existing conversations for user ${userId}`);
-
-  let mostRecentConversation = null;
-  let mostRecentKey = null;
-
-  if (userConversations.length > 0) {
-    [mostRecentKey, mostRecentConversation] = userConversations[0];
-    const timeSinceLastActive = Date.now() - mostRecentConversation.lastActive;
-    console.log(`⏰ Most recent conversation: ${mostRecentKey}, ${Math.round(timeSinceLastActive / 1000 / 60)} minutes ago`);
-  }
-
-  // Detect topic (curriculum-aware)
-  const detectedTopic = detectMathematicalTopic(message, mostRecentConversation);
-  console.log(`🎯 Topic: ${detectedTopic}`);
-
-  // Scope check (Year 7)
-  const scopeCheck = checkYear7Scope(message, detectedTopic);
-
-  // Handle definition requests with Socratic responses before scope enforcement
-  if (scopeCheck.definitionRequest) {
-    const definition = getYear7Definition(scopeCheck.definitionRequest);
-    if (definition) {
-      console.log(`📖 Providing Socratic definition for: ${scopeCheck.definitionRequest}`);
-
-      const defKey = getConversationKey(userId, 'Algebra & Equations', yearLevel);
-      let definitionConversation = conversations.get(defKey);
-      if (!definitionConversation) {
-        definitionConversation = {
-          messages: [],
-          totalTokens: 0,
-          subject: 'Algebra & Equations',
-          yearLevel,
-          curriculum,
-          createdAt: new Date(),
-          lastActive: new Date(),
-          curriculumLoaded: true,
-          lastCurriculumTopic: 'Algebra & Equations'
-        };
-      }
-
-      definitionConversation.messages.push({ role: 'user', content: message, timestamp: new Date() });
-      definitionConversation.messages.push({ role: 'assistant', content: definition.socratic, timestamp: new Date() });
-      definitionConversation.lastActive = new Date();
-      conversations.set(defKey, definitionConversation);
-
-      return res.json({
-        response: definition.socratic,
-        subject: 'Algebra & Equations',
-        detectedTopic: 'Algebra & Equations',
-        yearLevel,
-        curriculum,
-        conversationLength: definitionConversation.messages.length,
-        conversationId: defKey,
-        definitionProvided: scopeCheck.definitionRequest
+    // Check token limits
+    if (tokenData.used >= tokenData.limit) {
+      return res.status(429).json({ 
+        error: true, 
+        message: 'Token limit exceeded. Please upgrade your plan.',
+        tokens: tokenData 
       });
     }
-  }
 
-  if (!scopeCheck.inScope) {
-    console.log(`🚫 Out of Year 7 scope: ${detectedTopic}`);
-    return res.json({
-      response: scopeCheck.refusal,
-      error: 'out_of_scope',
-      detectedTopic,
-      yearLevel,
-      curriculum
-    });
-  }
+    // ---- Detect topic & scope (lightweight, safe) ----
+    const detectedTopic = 'Mathematics'; 
 
-  // Build/migrate conversation
-  const conversationKey = getConversationKey(userId, detectedTopic, yearLevel);
-  console.log(`🔑 Conversation key: ${conversationKey}`);
+    // Conversation bookkeeping
+    const conversationKey = `${userId}_${detectedTopic}_${yearLevel}`;
+    let conversation = conversations.get(conversationKey);
+    if (!conversation) {
+      conversation = {
+        messages: [],
+        totalTokens: 0,
+      };
+      conversations.set(conversationKey, conversation);
+    }
 
-  if (resetContext) {
-    conversations.delete(conversationKey);
-    console.log(`🔄 Reset conversation context for ${conversationKey}`);
-  }
+    // ---- Build system prompt first ----
+    let systemPrompt = createSystemPrompt(subject, yearLevel, curriculumLabel);
 
-  let conversation = conversations.get(conversationKey);
-
-  // Continue the most recent conversation if it's fresh (<5min), migrating topic if needed
-  if (!conversation && mostRecentConversation) {
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-    if (mostRecentConversation.lastActive > fiveMinutesAgo) {
-      console.log(`🔗 Continuing recent conversation from ${mostRecentKey}`);
-      conversation = mostRecentConversation;
-
-      const topicChanged = handleTopicChange(conversation, detectedTopic, message);
-      if (topicChanged) {
-        conversation.lastActive = new Date();
-        if (mostRecentKey !== conversationKey) {
-          conversations.delete(mostRecentKey);
-          conversations.set(conversationKey, conversation);
-          console.log(`📝 Migrated conversation from ${mostRecentKey} to ${conversationKey}`);
-        }
+    // ---- Append topic-specific context safely ----
+    if (Array.isArray(selectedTopics) && selectedTopics.length > 0) {
+      const topicContext = buildTopicSpecificPrompt(selectedTopics);
+      if (topicContext && topicContext.trim()) {
+        systemPrompt += '\n\n' + topicContext;
+        console.log('📚 Added topic-specific context');
       }
     }
-  }
 
-  if (!conversation) {
-    console.log(`✨ Creating new conversation for ${conversationKey}`);
-    conversation = {
-      messages: [],
-      totalTokens: 0,
-      subject: detectedTopic,
-      yearLevel,
-      curriculum,
-      createdAt: new Date(),
-      lastActive: new Date(),
-      curriculumLoaded: false,
-      lastCurriculumTopic: null
-    };
-  } else {
-    console.log(`📚 Using existing conversation with ${conversation.messages.length} messages`);
-  }
+    // ---- Build user message ----
+    const contextualMessage = diagramContext
+      ? `${diagramContext}\n\nStudent question: ${message}`
+      : message;
 
-  conversation.lastActive = new Date();
+    // ---- If Anthropic not configured, return a safe fallback ----
+    if (!anthropic) {
+      const fallback = `Great choice! Let's start with a quick, Year 7-friendly step.\n\n` +
+        `**Goal:** Understand the problem and choose a method.\n` +
+        `**Steps:** (1) Tell me the exact question. (2) I'll guide you step by step.\n` +
+        `**Check-your-understanding:** Can you share one example you want to try?`;
 
-  // Basic safety on input size
-  const inputTokens = estimateTokens(message || '');
-  if (inputTokens > 1000) {
-    return res.json({
-      response: 'That\'s quite a lot to work with! Can you break that down and ask me about just one part of your problem? What\'s the main thing you\'re stuck on?',
-      error: 'input_too_long',
-    });
-  }
+      conversation.messages.push({ role: 'user', content: contextualMessage, timestamp: new Date() });
+      conversation.messages.push({ role: 'assistant', content: fallback, timestamp: new Date() });
 
-  // On-topic guard
-  if (!isOnTopic(message, detectedTopic)) {
-    return res.json({
-      response: `I'm here to help you discover answers in Year 7 mathematics! What specific math problem or concept would you like to explore? What are you curious about?`,
-      error: 'off_topic',
-    });
-  }
-
-  // Fallback if Anthropic not configured
-  if (!anthropic) {
-    return res.json({
-      response: `Great question about ${detectedTopic}! What do you think might be the first step? What comes to mind when you look at this problem? (Add CLAUDE_API_KEY for AI responses)`,
-      fallback: true,
-    });
-  }
-
-  try {
-    // Record incoming user message
-    conversation.messages.push({ role: 'user', content: message, timestamp: new Date() });
-    console.log(`💬 Added message. Total messages: ${conversation.messages.length}`);
-
-    // Prepare context
-    let messagesToSend = [...conversation.messages];
-    let contextSummary = '';
-
-    // Inject curriculum context if needed
-    const needsCurriculumContext = !conversation.curriculumLoaded ||
-                                   conversation.lastCurriculumTopic !== detectedTopic;
-    if (needsCurriculumContext) {
-      const curriculumContext = getCurriculumContext(detectedTopic);
-      if (curriculumContext) {
-        messagesToSend.unshift({ role: 'system', content: `[${curriculumContext}]` });
-        console.log(`📖 Added curriculum context: ${curriculumContext}`);
-      }
-      conversation.curriculumLoaded = true;
-      conversation.lastCurriculumTopic = detectedTopic;
-    }
-
-    // Summarize older messages if long
-    if (messagesToSend.length > 14) {
-      const oldMessages = messagesToSend.slice(0, -10);
-      contextSummary = summarizeOldContext(oldMessages);
-      messagesToSend = messagesToSend.slice(-10);
-      if (contextSummary) {
-        messagesToSend.unshift({ role: 'system', content: contextSummary });
-      }
-      console.log(`📝 Summarized ${oldMessages.length} old messages, keeping ${messagesToSend.length} recent ones`);
-    }
-
-    // Clean messages for Claude
-    const cleanMessages = messagesToSend
-      .filter(m => m.role !== 'system' || m.content.startsWith('Earlier in our conversation') || m.content.startsWith('[Y7'))
-      .map(m => ({
-        role: m.role === 'system' ? 'user' : m.role,
-        content: m.role === 'system' ? `[Context: ${m.content}]` : m.content
-      }));
-
-    const systemPrompt = createSystemPrompt(conversation.subject, yearLevel, curriculum);
-
-    console.log(`🤖 Sending ${cleanMessages.length} messages to Claude for ${conversation.subject}`);
-    console.log(`📋 Recent messages: ${cleanMessages.slice(-3).map(m => `${m.role}: "${m.content.substring(0, 30)}..."`).join(', ')}`);
-
-    // Call Claude
-    const claudeResponse = await anthropic.messages.create({
-      model: 'claude-3-5-haiku-20241022',
-      max_tokens: 180,
-      system: systemPrompt,
-      messages: cleanMessages,
-    });
-
-    const responseText = claudeResponse.content?.[0]?.text || 'What do you think we should try next? What comes to mind?';
-
-    // Record assistant response
-    conversation.messages.push({ role: 'assistant', content: responseText, timestamp: new Date() });
-
-    // Token accounting
-    const actualInputTokens  = claudeResponse.usage?.input_tokens  || inputTokens;
-    const actualOutputTokens = claudeResponse.usage?.output_tokens || estimateTokens(responseText);
-    conversation.totalTokens += actualInputTokens + actualOutputTokens;
-
-    // Per-user usage
-    const currentUsage = userTokenUsage.get(userId) || { used: 0, limit: 5000 };
-    currentUsage.used += actualInputTokens + actualOutputTokens;
-    userTokenUsage.set(userId, currentUsage);
-
-    console.log(`🪙 Tokens - Input: ${actualInputTokens}, Output: ${actualOutputTokens}, User Total: ${currentUsage.used}/${currentUsage.limit}`);
-
-    // Persist conversation in memory
-    conversations.set(conversationKey, conversation);
-
-    // ✅ NEW: save transcript (server-side)
-    const userIdLabel = userId || 'Alex';
-    if (!conversationTranscripts.has(userIdLabel)) {
-      conversationTranscripts.set(userIdLabel, []);
-    }
-
-    const transcript = createTranscriptEntry(
-      userIdLabel,
-      message,        // student's message
-      responseText,   // tutor reply
-      {
-        subject: conversation.subject,
-        yearLevel,
-        curriculum,
-        conversationId: conversationKey,
+      return res.json({
+        response: fallback,
+        subject,
         detectedTopic,
-        tokensUsed: actualInputTokens + actualOutputTokens,
-        diagramContext: !!diagramContext
-      }
-    );
+        yearLevel,
+        curriculum: curriculumLabel,
+        conversationLength: conversation.messages.length,
+        tokens: tokenData
+      });
+    }
 
-    conversationTranscripts.get(userIdLabel).push(transcript);
-    console.log(`📝 Saved transcript for ${userIdLabel}. Total: ${conversationTranscripts.get(userIdLabel).length}`);
-
-    // Trim stale conversations for this user (keep ≤50, or <1 week)
-    const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const allUserConversations = Array.from(conversations.entries())
-      .filter(([key]) => key.startsWith(userId))
-      .sort(([,a], [,b]) => b.lastActive - a.lastActive);
-    allUserConversations.forEach(([key, conv], index) => {
-      if (index >= 50 || conv.lastActive < oneWeekAgo) {
-        conversations.delete(key);
-      }
+    // ---- Call Anthropic safely ----
+    const ai = await anthropic.messages.create({
+      model: 'claude-3-5-haiku-20241022',
+      max_tokens: 800,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: contextualMessage }]
     });
 
-    console.log(`✅ Response generated. Conversation length: ${conversation.messages.length}`);
+    const text = (ai && ai.content && ai.content[0] && ai.content[0].text) || 
+                 "Let's start! What's the first part of the problem?";
 
-    // Respond
-    res.json({
-      response: responseText,
-      subject: conversation.subject,
+    // Estimate and update token usage
+    const estimatedTokens = estimateTokens(systemPrompt + contextualMessage + text);
+    tokenData.used += estimatedTokens;
+    userTokenUsage.set(userId, tokenData);
+    
+    console.log(`💰 Token usage updated for ${userId}: ${tokenData.used}/${tokenData.limit}`);
+
+    // Save to conversation
+    conversation.messages.push({ role: 'user', content: contextualMessage, timestamp: new Date() });
+    conversation.messages.push({ role: 'assistant', content: text, timestamp: new Date() });
+    conversation.totalTokens += estimatedTokens;
+
+    // Save transcript
+    const transcript = createTranscriptEntry(userId, message, text, {
+      subject,
+      yearLevel,
+      curriculum: curriculumLabel,
+      detectedTopic,
+      tokensUsed: estimatedTokens,
+      conversationId: conversationKey,
+      selectedTopics: selectedTopics.length > 0 ? selectedTopics : undefined,
+      diagramContext: diagramContext ? true : undefined
+    });
+
+    if (!conversationTranscripts.has(userId)) {
+      conversationTranscripts.set(userId, []);
+    }
+    conversationTranscripts.get(userId).push(transcript);
+
+    return res.json({
+      response: text,
+      subject,
       detectedTopic,
       yearLevel,
-      curriculum,
+      curriculum: curriculumLabel,
       conversationLength: conversation.messages.length,
-      conversationAge: Math.round((Date.now() - conversation.createdAt) / (1000 * 60)), // minutes
-      powered_by: 'Claude 3.5 Haiku',
       tokens: {
-        input: actualInputTokens,
-        output: actualOutputTokens,
-        conversationTotal: conversation.totalTokens,
-        totalUsed: currentUsage.used,
-        userTotal: currentUsage.used,
-        limit: currentUsage.limit,
-      },
-      conversationId: conversationKey,
-      curriculum: {
-        topicInScope: scopeCheck.inScope,
-        detectedTopic: detectedTopic
-      },
-      debug: {
-        foundExistingConversations: userConversations.length,
-        usedExistingConversation: !!mostRecentConversation,
-        totalMessagesInConversation: conversation.messages.length,
-        userId: userId,
-        originalConversationKey: conversationKey,
-        curriculumLoaded: conversation.curriculumLoaded,
-        curriculumTopic: conversation.lastCurriculumTopic
+        used: tokenData.used,
+        limit: tokenData.limit,
+        thisRequest: estimatedTokens
       }
     });
 
-  } catch (error) {
-    console.error('❌ Claude API Error:', error.message);
-    res.json({
-      response: "I'm having a technical hiccup right now. While I sort this out, can you tell me what you were thinking about that problem? What approach were you considering?",
-      error: true,
-      fallback: true,
+  } catch (e) {
+    console.error('CHAT ROUTE ERROR:', e);
+    return res.status(500).json({ 
+      error: true, 
+      message: e.message || 'Server error'
     });
   }
-
-  console.log('=== CHAT REQUEST COMPLETE ===\n');
 });
 
 
