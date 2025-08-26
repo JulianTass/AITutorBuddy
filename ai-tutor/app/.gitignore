@@ -18,7 +18,10 @@ git remote show origin# See https://help.github.com/articles/ignoring-files/ for
 .env.test.local
 .env.production.local
 .env
+.env.*
 *.env
+**/.env
+**/.env.*
 
 npm-debug.log*
 yarn-debug.log*
